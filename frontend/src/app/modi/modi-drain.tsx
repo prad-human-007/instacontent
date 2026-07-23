@@ -168,14 +168,14 @@ function drawOffscreenCard(
 	ctx.textBaseline = "top";
 
 	// Title Main: "PM Modi’s Term is"
-	ctx.font = "700 68px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+	ctx.font = "800 78px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 	ctx.fillStyle = "#ffffff";
 	ctx.textAlign = "center";
-	const titleMainY = 100;
+	const titleMainY = 192;
 	ctx.fillText("PM Modi’s Term is", width / 2, titleMainY);
 
 	// Title Sub: ${percentage}% Completed
-	ctx.font = "800 84px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+	ctx.font = "800 78px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 	const pctText = `${percentage.toFixed(2)}%`;
 	const compText = " Completed";
 
@@ -183,7 +183,7 @@ function drawOffscreenCard(
 	const compWidth = ctx.measureText(compText).width;
 	const totalWidth = pctWidth + compWidth;
 	const startX = width / 2 - totalWidth / 2;
-	const titleSubY = 198;
+	const titleSubY = 290;
 
 	ctx.textAlign = "left";
 	ctx.fillStyle = "#ffb500";
@@ -218,7 +218,7 @@ function drawOffscreenCard(
 
 	// Fit portrait inside canvas container (matching .canvasContainer padding: 0 45px 68px 45px)
 	const containerX = 45;
-	const containerY = 320;
+	const containerY = 412;
 	const containerW = width - 2 * containerX; // 990px
 	const containerH = height - containerY - 68; // 1532px
 
