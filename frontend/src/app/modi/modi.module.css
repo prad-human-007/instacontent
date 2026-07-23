@@ -22,17 +22,60 @@
 
 .portrait {
 	position: relative;
-	height: min(80vh, 640px);
+	height: min(85vh, 680px);
 	aspect-ratio: 9 / 16;
-	display: grid;
-	place-items: center;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
 	border: 1px solid rgba(255, 255, 255, 0.12);
-	border-radius: 20px;
+	border-radius: 24px;
 	overflow: hidden;
 	background: #000;
 	box-shadow:
 		0 25px 50px -12px rgba(0, 0, 0, 0.5),
 		0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.header {
+	padding: 2.2rem 1.2rem 0.5rem 1.2rem;
+	text-align: center;
+	z-index: 2;
+	user-select: none;
+	width: 100%;
+}
+
+.titleMain {
+	font-size: clamp(1.25rem, 3.5vw, 1.7rem);
+	font-weight: 700;
+	color: #ffffff;
+	margin: 0 0 0.35rem 0;
+	letter-spacing: -0.01em;
+	line-height: 1.2;
+}
+
+.titleSub {
+	font-size: clamp(1.45rem, 4.2vw, 2rem);
+	font-weight: 800;
+	color: #ffffff;
+	margin: 0;
+	line-height: 1.2;
+}
+
+.percentText {
+	color: var(--yellow);
+	margin-right: 0.4rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.canvasContainer {
+	flex: 1;
+	width: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	position: relative;
+	overflow: hidden;
+	padding: 0 1rem 1.5rem 1rem;
 }
 
 .canvas {
@@ -130,7 +173,7 @@
 	}
 
 	.portrait {
-		height: min(65vh, 480px);
+		height: min(70vh, 520px);
 	}
 
 	.controls {
@@ -145,4 +188,5 @@
 		transition: none;
 	}
 }
+
 

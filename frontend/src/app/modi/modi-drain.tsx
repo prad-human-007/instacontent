@@ -86,6 +86,7 @@ export default function ModiDrain() {
 	const assetsRef = useRef<RenderAssets | null>(null);
 	const animationFrameRef = useRef<number | null>(null);
 	const [phase, setPhase] = useState<Phase>("loading");
+	const [percentage, setPercentage] = useState<number>(100);
 
 	const paint = useCallback((fillTop: number) => {
 		const canvas = canvasRef.current;
@@ -115,6 +116,9 @@ export default function ModiDrain() {
 		}
 
 		context.drawImage(assets.frame, 0, 0, assets.width, assets.height);
+
+		const currentPercent = Math.max(0, Math.min(100, ((assets.height - top) / assets.height) * 100));
+		setPercentage(currentPercent);
 	}, []);
 
 	const resetPortrait = useCallback(() => {
@@ -225,13 +229,23 @@ export default function ModiDrain() {
 		<main className={styles.page}>
 			<section className={styles.experience}>
 				<div className={styles.portrait} aria-busy={phase === "loading"}>
-					<canvas
-						ref={canvasRef}
-						className={styles.canvas}
-						role="img"
-						aria-label="White line portrait animation"
-					/>
-					{phase === "loading" && <span className={styles.loading}>Preparing portrait…</span>}
+					<div className={styles.header}>
+						<h1 className={styles.titleMain}>PM Modi Term is</h1>
+						<h2 className={styles.titleSub}>
+							<span className={styles.percentText}>{percentage.toFixed(2)}%</span>
+							<span>Complete</span>
+						</h2>
+					</div>
+
+					<div className={styles.canvasContainer}>
+						<canvas
+							ref={canvasRef}
+							className={styles.canvas}
+							role="img"
+							aria-label="White line portrait animation"
+						/>
+						{phase === "loading" && <span className={styles.loading}>Preparing portrait…</span>}
+					</div>
 				</div>
 
 				<div className={styles.controls}>
@@ -259,4 +273,5 @@ export default function ModiDrain() {
 		</main>
 	);
 }
+
 
