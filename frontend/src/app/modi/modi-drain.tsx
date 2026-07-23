@@ -96,18 +96,58 @@ function getTodayString() {
 	return `${year}-${month}-${day}`;
 }
 
-function calculateTargetPercentage(start: string, current: string, end: string) {
-	const startMs = new Date(start).getTime();
-	const currentMs = new Date(current).getTime();
-	const endMs = new Date(end).getTime();
+function parseDateString(dateStr: string): Date | null {
+	if (!dateStr || typeof dateStr !== "string") return null;
+	const str = dateStr.trim();
 
-	if (Number.isNaN(startMs) || Number.isNaN(currentMs) || Number.isNaN(endMs) || endMs <= startMs) {
+	// Match YYYY-MM-DD or YYYY/MM/DD
+	const ymdMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+	if (ymdMatch) {
+		const year = parseInt(ymdMatch[1], 10);
+		const month = parseInt(ymdMatch[2], 10) - 1;
+		const day = parseInt(ymdMatch[3], 10);
+		const d = new Date(Date.UTC(year, month, day));
+		return Number.isNaN(d.getTime()) ? null : d;
+	}
+
+	// Match DD/MM/YYYY or DD-MM-YYYY
+	const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+	if (dmyMatch) {
+		const day = parseInt(dmyMatch[1], 10);
+		const month = parseInt(dmyMatch[2], 10) - 1;
+		const year = parseInt(dmyMatch[3], 10);
+		const d = new Date(Date.UTC(year, month, day));
+		return Number.isNaN(d.getTime()) ? null : d;
+	}
+
+	const ts = Date.parse(str);
+	if (!Number.isNaN(ts)) {
+		return new Date(ts);
+	}
+
+	return null;
+}
+
+function calculateTargetPercentage(start: string, current: string, end: string) {
+	const startDateObj = parseDateString(start);
+	const currentDateObj = parseDateString(current);
+	const endDateObj = parseDateString(end);
+
+	if (!startDateObj || !currentDateObj || !endDateObj) {
+		return 0;
+	}
+
+	const startMs = startDateObj.getTime();
+	const currentMs = currentDateObj.getTime();
+	const endMs = endDateObj.getTime();
+
+	if (endMs <= startMs) {
 		return 0;
 	}
 
 	const totalDuration = endMs - startMs;
-	const remaining = endMs - currentMs;
-	const fraction = remaining / totalDuration;
+	const elapsed = currentMs - startMs;
+	const fraction = elapsed / totalDuration;
 	return Math.max(0, Math.min(100, fraction * 100));
 }
 
@@ -288,7 +328,7 @@ export default function ModiDrain() {
 			<section className={styles.experience}>
 				<div className={styles.portrait} aria-busy={phase === "loading"}>
 					<div className={styles.header}>
-						<h1 className={styles.titleMain}>PM Modi Term is</h1>
+						<h1 className={styles.titleMain}>PM Modi’s Term is</h1>
 						<h2 className={styles.titleSub}>
 							<span className={styles.percentText}>{percentage.toFixed(2)}%</span>
 							<span>Complete</span>
