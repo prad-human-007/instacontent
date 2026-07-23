@@ -81,12 +81,67 @@ function createFillMask(framePixels: ImageData, width: number, height: number) {
 	return maskCanvas;
 }
 
+const LOCAL_STORAGE_KEY_START = "modi_start_date";
+const LOCAL_STORAGE_KEY_CURRENT = "modi_current_date";
+const LOCAL_STORAGE_KEY_END = "modi_end_date";
+
+const DEFAULT_START_DATE = "2024-06-09";
+const DEFAULT_END_DATE = "2029-06-09";
+
+function getTodayString() {
+	const d = new Date();
+	const year = d.getFullYear();
+	const month = String(d.getMonth() + 1).padStart(2, "0");
+	const day = String(d.getDate()).padStart(2, "0");
+	return `${year}-${month}-${day}`;
+}
+
+function calculateTargetPercentage(start: string, current: string, end: string) {
+	const startMs = new Date(start).getTime();
+	const currentMs = new Date(current).getTime();
+	const endMs = new Date(end).getTime();
+
+	if (Number.isNaN(startMs) || Number.isNaN(currentMs) || Number.isNaN(endMs) || endMs <= startMs) {
+		return 0;
+	}
+
+	const totalDuration = endMs - startMs;
+	const remaining = endMs - currentMs;
+	const fraction = remaining / totalDuration;
+	return Math.max(0, Math.min(100, fraction * 100));
+}
+
 export default function ModiDrain() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const assetsRef = useRef<RenderAssets | null>(null);
 	const animationFrameRef = useRef<number | null>(null);
 	const [phase, setPhase] = useState<Phase>("loading");
 	const [percentage, setPercentage] = useState<number>(100);
+
+	const [startDate, setStartDate] = useState<string>(DEFAULT_START_DATE);
+	const [currentDate, setCurrentDate] = useState<string>(getTodayString());
+	const [endDate, setEndDate] = useState<string>(DEFAULT_END_DATE);
+	const [isLoaded, setIsLoaded] = useState<boolean>(false);
+
+	useEffect(() => {
+		const savedStart = localStorage.getItem(LOCAL_STORAGE_KEY_START);
+		const savedCurrent = localStorage.getItem(LOCAL_STORAGE_KEY_CURRENT);
+		const savedEnd = localStorage.getItem(LOCAL_STORAGE_KEY_END);
+
+		if (savedStart) setStartDate(savedStart);
+		if (savedCurrent) setCurrentDate(savedCurrent);
+		else setCurrentDate(getTodayString());
+		if (savedEnd) setEndDate(savedEnd);
+
+		setIsLoaded(true);
+	}, []);
+
+	useEffect(() => {
+		if (!isLoaded) return;
+		localStorage.setItem(LOCAL_STORAGE_KEY_START, startDate);
+		localStorage.setItem(LOCAL_STORAGE_KEY_CURRENT, currentDate);
+		localStorage.setItem(LOCAL_STORAGE_KEY_END, endDate);
+	}, [startDate, currentDate, endDate, isLoaded]);
 
 	const paint = useCallback((fillTop: number) => {
 		const canvas = canvasRef.current;
@@ -142,11 +197,14 @@ export default function ModiDrain() {
 			animationFrameRef.current = null;
 		}
 
+		const targetPercentage = calculateTargetPercentage(startDate, currentDate, endDate);
 		const startLevel = assets.height * INITIAL_FILL_TOP;
+		const targetLevel = assets.height * (1 - targetPercentage / 100);
+
 		paint(startLevel);
 
 		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-			paint(assets.height);
+			paint(targetLevel);
 			setPhase("complete");
 			return;
 		}
@@ -156,7 +214,7 @@ export default function ModiDrain() {
 
 		const animate = (time: number) => {
 			const progress = Math.min((time - startedAt) / DRAIN_DURATION_MS, 1);
-			const fillTop = startLevel + (assets.height - startLevel) * progress;
+			const fillTop = startLevel + (targetLevel - startLevel) * progress;
 			paint(fillTop);
 
 			if (progress < 1) {
@@ -169,7 +227,7 @@ export default function ModiDrain() {
 		};
 
 		animationFrameRef.current = requestAnimationFrame(animate);
-	}, [paint, phase]);
+	}, [paint, phase, startDate, currentDate, endDate]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -249,25 +307,71 @@ export default function ModiDrain() {
 				</div>
 
 				<div className={styles.controls}>
-					<button
-						className={styles.button}
-						type="button"
-						onClick={startDrain}
-						disabled={phase === "loading" || phase === "running" || phase === "error"}
-					>
-						<span aria-hidden="true">▶</span>
-						Play
-					</button>
+					<div className={styles.dateGroup}>
+						<div className={styles.inputField}>
+							<label htmlFor="startDate" className={styles.label}>
+								Start Date
+							</label>
+							<input
+								id="startDate"
+								type="date"
+								className={styles.dateInput}
+								value={startDate}
+								onChange={(e) => setStartDate(e.target.value)}
+								disabled={phase === "running"}
+							/>
+						</div>
 
-					<button
-						className={styles.buttonSecondary}
-						type="button"
-						onClick={resetPortrait}
-						disabled={phase === "loading" || phase === "error"}
-					>
-						<span aria-hidden="true">↺</span>
-						Reset
-					</button>
+						<div className={styles.inputField}>
+							<label htmlFor="currentDate" className={styles.label}>
+								Current Date
+							</label>
+							<input
+								id="currentDate"
+								type="date"
+								className={styles.dateInput}
+								value={currentDate}
+								onChange={(e) => setCurrentDate(e.target.value)}
+								disabled={phase === "running"}
+							/>
+						</div>
+
+						<div className={styles.inputField}>
+							<label htmlFor="endDate" className={styles.label}>
+								End Date
+							</label>
+							<input
+								id="endDate"
+								type="date"
+								className={styles.dateInput}
+								value={endDate}
+								onChange={(e) => setEndDate(e.target.value)}
+								disabled={phase === "running"}
+							/>
+						</div>
+					</div>
+
+					<div className={styles.buttonGroup}>
+						<button
+							className={styles.button}
+							type="button"
+							onClick={startDrain}
+							disabled={phase === "loading" || phase === "running" || phase === "error"}
+						>
+							<span aria-hidden="true">▶</span>
+							Play
+						</button>
+
+						<button
+							className={styles.buttonSecondary}
+							type="button"
+							onClick={resetPortrait}
+							disabled={phase === "loading" || phase === "error"}
+						>
+							<span aria-hidden="true">↺</span>
+							Reset
+						</button>
+					</div>
 				</div>
 			</section>
 		</main>
