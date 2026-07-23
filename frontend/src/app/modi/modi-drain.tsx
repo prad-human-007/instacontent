@@ -6,8 +6,9 @@ import styles from "./modi.module.css";
 const FRAME_SRC = "/modi/modi-frame.png";
 const INITIAL_FILL_TOP = 0;
 const DRAIN_DURATION_MS = 6000;
+const EXTRA_HOLD_MS = 2000;
 const LINE_ALPHA_THRESHOLD = 24;
-const FILL_COLOUR = [255, 181, 0] as const;
+const FILL_COLOUR = [243, 178, 62] as const;
 
 type Phase = "loading" | "ready" | "running" | "complete" | "error";
 type ExportState = "idle" | "preparing" | "recording" | "converting" | "downloading";
@@ -186,7 +187,7 @@ function drawOffscreenCard(
 	const titleSubY = 290;
 
 	ctx.textAlign = "left";
-	ctx.fillStyle = "#ffb500";
+	ctx.fillStyle = "#F3B23E";
 	ctx.fillText(pctText, startX, titleSubY);
 
 	ctx.fillStyle = "#ffffff";
@@ -432,15 +433,19 @@ export default function ModiDrain() {
 		const runAnimationWithDuration = (durationMs: number) => {
 			audio.play().catch(() => {});
 			setPhase("running");
-			const startedAt = performance.now();
+			let startedAt: number | null = null;
 
 			const animate = (time: number) => {
-				const progress = Math.min((time - startedAt) / durationMs, 1);
+				if (startedAt === null) {
+					startedAt = time;
+				}
+				const elapsedMs = time - startedAt;
+				const progress = Math.min(elapsedMs / durationMs, 1);
 				const fillTop = startLevel + (targetLevel - startLevel) * progress;
 				paint(fillTop);
 				setPercentage(progress * completedPercentage);
 
-				if (progress < 1) {
+				if (elapsedMs < durationMs + EXTRA_HOLD_MS) {
 					animationFrameRef.current = requestAnimationFrame(animate);
 					return;
 				}
@@ -577,14 +582,21 @@ export default function ModiDrain() {
 				};
 			});
 
+			drawOffscreenCard(ctx, startLevel, 0, assets, portraitCanvas);
+			paint(startLevel);
+			setPercentage(0);
+
 			setExportState("recording");
 
-			const recordStartTime = performance.now();
 			sourceNode.start(0);
 			mediaRecorder.start();
 
 			await new Promise<void>((resolve) => {
+				let recordStartTime: number | null = null;
 				const animate = (now: number) => {
+					if (recordStartTime === null) {
+						recordStartTime = now;
+					}
 					const elapsedMs = now - recordStartTime;
 					const progress = Math.min(elapsedMs / durationMs, 1);
 					const fillTop = startLevel + (targetLevel - startLevel) * progress;
@@ -594,7 +606,7 @@ export default function ModiDrain() {
 					paint(fillTop);
 					setPercentage(currentPct);
 
-					if (progress < 1) {
+					if (elapsedMs < durationMs + EXTRA_HOLD_MS) {
 						requestAnimationFrame(animate);
 					} else {
 						drawOffscreenCard(ctx, targetLevel, completedPercentage, assets, portraitCanvas);

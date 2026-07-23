@@ -1,5 +1,5 @@
 .page {
-	--yellow: #ffb500;
+	--yellow: #F3B23E;
 	min-height: 100svh;
 	overflow: hidden;
 	background: #2d323b;
@@ -156,7 +156,7 @@
 .dateInput:focus,
 .selectInput:focus {
 	border-color: var(--yellow);
-	box-shadow: 0 0 0 2px rgba(255, 181, 0, 0.25);
+	box-shadow: 0 0 0 2px rgba(243, 178, 62, 0.25);
 }
 
 .dateInput:disabled,
@@ -200,7 +200,7 @@
 	border: 1px solid var(--yellow);
 	background: var(--yellow);
 	color: #050505;
-	box-shadow: 0 4px 14px rgba(255, 181, 0, 0.25);
+	box-shadow: 0 4px 14px rgba(243, 178, 62, 0.25);
 }
 
 .button:hover:not(:disabled) {
