@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./modi.module.css";
 
 const FRAME_SRC = "/modi/modi-frame.png";
-const INITIAL_FILL_TOP = 0.255;
+const INITIAL_FILL_TOP = 0;
 const DRAIN_DURATION_MS = 6000;
 const LINE_ALPHA_THRESHOLD = 24;
 const FILL_COLOUR = [255, 181, 0] as const;
@@ -117,6 +117,56 @@ export default function ModiDrain() {
 		context.drawImage(assets.frame, 0, 0, assets.width, assets.height);
 	}, []);
 
+	const resetPortrait = useCallback(() => {
+		if (animationFrameRef.current !== null) {
+			cancelAnimationFrame(animationFrameRef.current);
+			animationFrameRef.current = null;
+		}
+		const assets = assetsRef.current;
+		if (assets) {
+			paint(assets.height * INITIAL_FILL_TOP);
+			setPhase("ready");
+		}
+	}, [paint]);
+
+	const startDrain = useCallback(() => {
+		const assets = assetsRef.current;
+		if (!assets || phase === "loading" || phase === "running" || phase === "error") return;
+
+		if (animationFrameRef.current !== null) {
+			cancelAnimationFrame(animationFrameRef.current);
+			animationFrameRef.current = null;
+		}
+
+		const startLevel = assets.height * INITIAL_FILL_TOP;
+		paint(startLevel);
+
+		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			paint(assets.height);
+			setPhase("complete");
+			return;
+		}
+
+		setPhase("running");
+		const startedAt = performance.now();
+
+		const animate = (time: number) => {
+			const progress = Math.min((time - startedAt) / DRAIN_DURATION_MS, 1);
+			const fillTop = startLevel + (assets.height - startLevel) * progress;
+			paint(fillTop);
+
+			if (progress < 1) {
+				animationFrameRef.current = requestAnimationFrame(animate);
+				return;
+			}
+
+			animationFrameRef.current = null;
+			setPhase("complete");
+		};
+
+		animationFrameRef.current = requestAnimationFrame(animate);
+	}, [paint, phase]);
+
 	useEffect(() => {
 		let cancelled = false;
 		const frame = new Image();
@@ -171,80 +221,42 @@ export default function ModiDrain() {
 		};
 	}, [paint]);
 
-	const startDrain = () => {
-		const assets = assetsRef.current;
-		if (!assets || phase === "loading" || phase === "running" || phase === "error") return;
-
-		const startLevel = assets.height * INITIAL_FILL_TOP;
-		paint(startLevel);
-
-		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-			paint(assets.height);
-			setPhase("complete");
-			return;
-		}
-
-		setPhase("running");
-		const startedAt = performance.now();
-
-		const animate = (time: number) => {
-			const progress = Math.min((time - startedAt) / DRAIN_DURATION_MS, 1);
-			const fillTop = startLevel + (assets.height - startLevel) * progress;
-			paint(fillTop);
-
-			if (progress < 1) {
-				animationFrameRef.current = requestAnimationFrame(animate);
-				return;
-			}
-
-			animationFrameRef.current = null;
-			setPhase("complete");
-		};
-
-		animationFrameRef.current = requestAnimationFrame(animate);
-	};
-
-	const buttonLabel = {
-		loading: "Preparing portrait…",
-		ready: "Lower the yellow",
-		running: "Yellow lowering…",
-		complete: "Replay animation",
-		error: "Portrait unavailable",
-	}[phase];
-
 	return (
 		<main className={styles.page}>
-			<section className={styles.experience} aria-labelledby="modi-title">
-				<header className={styles.heading}>
-					<p>Interactive portrait</p>
-					<h1 id="modi-title">Lower the yellow</h1>
-				</header>
-
+			<section className={styles.experience}>
 				<div className={styles.portrait} aria-busy={phase === "loading"}>
 					<canvas
 						ref={canvasRef}
 						className={styles.canvas}
 						role="img"
-						aria-label="White line portrait of Narendra Modi with yellow colour filling the figure from the current level down"
+						aria-label="White line portrait animation"
 					/>
 					{phase === "loading" && <span className={styles.loading}>Preparing portrait…</span>}
 				</div>
 
-				<button
-					className={styles.button}
-					type="button"
-					onClick={startDrain}
-					disabled={phase === "loading" || phase === "running" || phase === "error"}
-				>
-					<span aria-hidden="true">↓</span>
-					{buttonLabel}
-				</button>
+				<div className={styles.controls}>
+					<button
+						className={styles.button}
+						type="button"
+						onClick={startDrain}
+						disabled={phase === "loading" || phase === "running" || phase === "error"}
+					>
+						<span aria-hidden="true">▶</span>
+						Play
+					</button>
 
-				<p className={styles.status} aria-live="polite">
-					{phase === "complete" ? "The yellow has reached the bottom." : ""}
-					{phase === "error" ? "The portrait could not be loaded." : ""}
-				</p>
+					<button
+						className={styles.buttonSecondary}
+						type="button"
+						onClick={resetPortrait}
+						disabled={phase === "loading" || phase === "error"}
+					>
+						<span aria-hidden="true">↺</span>
+						Reset
+					</button>
+				</div>
 			</section>
 		</main>
 	);
 }
+
