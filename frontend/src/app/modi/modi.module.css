@@ -131,7 +131,8 @@
 	letter-spacing: 0.06em;
 }
 
-.dateInput {
+.dateInput,
+.selectInput {
 	background: #14171c;
 	border: 1px solid rgba(255, 255, 255, 0.15);
 	border-radius: 8px;
@@ -144,17 +145,26 @@
 	transition:
 		border-color 150ms ease,
 		box-shadow 150ms ease;
+	cursor: pointer;
 }
 
-.dateInput:focus {
+.selectInput option {
+	background: #14171c;
+	color: #ffffff;
+}
+
+.dateInput:focus,
+.selectInput:focus {
 	border-color: var(--yellow);
 	box-shadow: 0 0 0 2px rgba(255, 181, 0, 0.25);
 }
 
-.dateInput:disabled {
+.dateInput:disabled,
+.selectInput:disabled {
 	opacity: 0.4;
 	cursor: not-allowed;
 }
+
 
 .buttonGroup {
 	display: flex;

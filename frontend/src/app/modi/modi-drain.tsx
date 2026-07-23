@@ -155,6 +155,8 @@ export default function ModiDrain() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const assetsRef = useRef<RenderAssets | null>(null);
 	const animationFrameRef = useRef<number | null>(null);
+	const audioRef = useRef<HTMLAudioElement | null>(null);
+
 	const [phase, setPhase] = useState<Phase>("loading");
 	const [percentage, setPercentage] = useState<number>(100);
 
@@ -162,6 +164,21 @@ export default function ModiDrain() {
 	const [currentDate, setCurrentDate] = useState<string>(getTodayString());
 	const [endDate, setEndDate] = useState<string>(DEFAULT_END_DATE);
 	const [isLoaded, setIsLoaded] = useState<boolean>(false);
+
+	const [audioList, setAudioList] = useState<string[]>(["reelAudio1.mp3"]);
+	const [selectedAudio, setSelectedAudio] = useState<string>("reelAudio1.mp3");
+
+	useEffect(() => {
+		fetch("/api/audio")
+			.then((res) => res.json())
+			.then((data) => {
+				if (data?.audios && Array.isArray(data.audios) && data.audios.length > 0) {
+					setAudioList(data.audios);
+					setSelectedAudio((prev) => (data.audios.includes(prev) ? prev : data.audios[0]));
+				}
+			})
+			.catch(() => {});
+	}, []);
 
 	useEffect(() => {
 		const savedStart = localStorage.getItem(LOCAL_STORAGE_KEY_START);
@@ -182,6 +199,14 @@ export default function ModiDrain() {
 		localStorage.setItem(LOCAL_STORAGE_KEY_CURRENT, currentDate);
 		localStorage.setItem(LOCAL_STORAGE_KEY_END, endDate);
 	}, [startDate, currentDate, endDate, isLoaded]);
+
+	const stopAudio = useCallback(() => {
+		if (audioRef.current) {
+			audioRef.current.pause();
+			audioRef.current.currentTime = 0;
+			audioRef.current = null;
+		}
+	}, []);
 
 	const paint = useCallback((fillTop: number) => {
 		const canvas = canvasRef.current;
@@ -214,6 +239,7 @@ export default function ModiDrain() {
 	}, []);
 
 	const resetPortrait = useCallback(() => {
+		stopAudio();
 		if (animationFrameRef.current !== null) {
 			cancelAnimationFrame(animationFrameRef.current);
 			animationFrameRef.current = null;
@@ -224,11 +250,13 @@ export default function ModiDrain() {
 			setPercentage(0);
 			setPhase("ready");
 		}
-	}, [paint]);
+	}, [paint, stopAudio]);
 
 	const startDrain = useCallback(() => {
 		const assets = assetsRef.current;
 		if (!assets || phase === "loading" || phase === "running" || phase === "error") return;
+
+		stopAudio();
 
 		if (animationFrameRef.current !== null) {
 			cancelAnimationFrame(animationFrameRef.current);
@@ -251,26 +279,51 @@ export default function ModiDrain() {
 			return;
 		}
 
-		setPhase("running");
-		const startedAt = performance.now();
+		const audio = new Audio(`/audio/${selectedAudio}`);
+		audioRef.current = audio;
 
-		const animate = (time: number) => {
-			const progress = Math.min((time - startedAt) / DRAIN_DURATION_MS, 1);
-			const fillTop = startLevel + (targetLevel - startLevel) * progress;
-			paint(fillTop);
-			setPercentage(progress * remainingPercentage);
+		const runAnimationWithDuration = (durationMs: number) => {
+			audio.play().catch(() => {});
+			setPhase("running");
+			const startedAt = performance.now();
 
-			if (progress < 1) {
-				animationFrameRef.current = requestAnimationFrame(animate);
-				return;
-			}
+			const animate = (time: number) => {
+				const progress = Math.min((time - startedAt) / durationMs, 1);
+				const fillTop = startLevel + (targetLevel - startLevel) * progress;
+				paint(fillTop);
+				setPercentage(progress * remainingPercentage);
 
-			animationFrameRef.current = null;
-			setPhase("complete");
+				if (progress < 1) {
+					animationFrameRef.current = requestAnimationFrame(animate);
+					return;
+				}
+
+				animationFrameRef.current = null;
+				setPhase("complete");
+			};
+
+			animationFrameRef.current = requestAnimationFrame(animate);
 		};
 
-		animationFrameRef.current = requestAnimationFrame(animate);
-	}, [paint, phase, startDate, currentDate, endDate]);
+		if (audio.readyState >= 1 && audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+			runAnimationWithDuration(audio.duration * 1000);
+		} else {
+			const onMetadata = () => {
+				audio.removeEventListener("loadedmetadata", onMetadata);
+				const duration = audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)
+					? audio.duration * 1000
+					: DRAIN_DURATION_MS;
+				runAnimationWithDuration(duration);
+			};
+			const onError = () => {
+				audio.removeEventListener("error", onError);
+				runAnimationWithDuration(DRAIN_DURATION_MS);
+			};
+			audio.addEventListener("loadedmetadata", onMetadata);
+			audio.addEventListener("error", onError);
+		}
+	}, [paint, phase, startDate, currentDate, endDate, selectedAudio, stopAudio]);
+
 
 	useEffect(() => {
 		let cancelled = false;
@@ -321,11 +374,12 @@ export default function ModiDrain() {
 
 		return () => {
 			cancelled = true;
+			stopAudio();
 			if (animationFrameRef.current !== null) {
 				cancelAnimationFrame(animationFrameRef.current);
 			}
 		};
-	}, [paint]);
+	}, [paint, stopAudio]);
 
 	return (
 		<main className={styles.page}>
@@ -352,6 +406,25 @@ export default function ModiDrain() {
 
 				<div className={styles.controls}>
 					<div className={styles.dateGroup}>
+						<div className={styles.inputField}>
+							<label htmlFor="audioSelect" className={styles.label}>
+								Select Audio
+							</label>
+							<select
+								id="audioSelect"
+								className={styles.selectInput}
+								value={selectedAudio}
+								onChange={(e) => setSelectedAudio(e.target.value)}
+								disabled={phase === "running"}
+							>
+								{audioList.map((file) => (
+									<option key={file} value={file}>
+										{file}
+									</option>
+								))}
+							</select>
+						</div>
+
 						<div className={styles.inputField}>
 							<label htmlFor="startDate" className={styles.label}>
 								Start Date
@@ -394,6 +467,7 @@ export default function ModiDrain() {
 							/>
 						</div>
 					</div>
+
 
 					<div className={styles.buttonGroup}>
 						<button
