@@ -158,7 +158,7 @@ export default function ModiDrain() {
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 
 	const [phase, setPhase] = useState<Phase>("loading");
-	const [percentage, setPercentage] = useState<number>(100);
+	const [percentage, setPercentage] = useState<number>(0);
 
 	const [startDate, setStartDate] = useState<string>(DEFAULT_START_DATE);
 	const [currentDate, setCurrentDate] = useState<string>(getTodayString());
@@ -264,7 +264,6 @@ export default function ModiDrain() {
 		}
 
 		const completedPercentage = calculateTargetPercentage(startDate, currentDate, endDate);
-		const remainingPercentage = 100 - completedPercentage;
 
 		const startLevel = assets.height * INITIAL_FILL_TOP;
 		const targetLevel = assets.height * (completedPercentage / 100);
@@ -274,7 +273,7 @@ export default function ModiDrain() {
 
 		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 			paint(targetLevel);
-			setPercentage(remainingPercentage);
+			setPercentage(completedPercentage);
 			setPhase("complete");
 			return;
 		}
@@ -291,7 +290,7 @@ export default function ModiDrain() {
 				const progress = Math.min((time - startedAt) / durationMs, 1);
 				const fillTop = startLevel + (targetLevel - startLevel) * progress;
 				paint(fillTop);
-				setPercentage(progress * remainingPercentage);
+				setPercentage(progress * completedPercentage);
 
 				if (progress < 1) {
 					animationFrameRef.current = requestAnimationFrame(animate);
@@ -389,7 +388,7 @@ export default function ModiDrain() {
 						<h1 className={styles.titleMain}>PM Modi’s Term is</h1>
 						<h2 className={styles.titleSub}>
 							<span className={styles.percentText}>{percentage.toFixed(2)}%</span>
-							<span>Remaining</span>
+							<span>Completed</span>
 						</h2>
 					</div>
 
