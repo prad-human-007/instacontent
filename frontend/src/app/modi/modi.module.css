@@ -28,7 +28,7 @@
 	flex-direction: column;
 	align-items: center;
 	border: 1px solid rgba(255, 255, 255, 0.12);
-	border-radius: 24px;
+	border-radius: 0;
 	overflow: hidden;
 	background: #000;
 	box-shadow:
@@ -174,7 +174,8 @@
 }
 
 .button,
-.buttonSecondary {
+.buttonSecondary,
+.buttonExport {
 	min-width: 9.5rem;
 	min-height: 3rem;
 	border-radius: 999px;
@@ -223,16 +224,44 @@
 	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
 }
 
+.buttonExport {
+	border: 1.5px solid rgba(255, 255, 255, 0.3);
+	background: #1f242d;
+	color: #ffffff;
+}
+
+.buttonExport:hover:not(:disabled) {
+	border-color: var(--yellow);
+	background: #282e3a;
+	color: var(--yellow);
+	transform: translateY(-2px);
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
 .button:focus-visible,
-.buttonSecondary:focus-visible {
+.buttonSecondary:focus-visible,
+.buttonExport:focus-visible {
 	outline: 3px solid var(--yellow);
 	outline-offset: 4px;
 }
 
 .button:disabled,
-.buttonSecondary:disabled {
+.buttonSecondary:disabled,
+.buttonExport:disabled {
 	cursor: not-allowed;
 	opacity: 0.4;
+}
+
+.exportError {
+	margin-top: 0.5rem;
+	padding: 0.6rem 0.8rem;
+	border-radius: 8px;
+	background: rgba(239, 68, 68, 0.15);
+	border: 1px solid rgba(239, 68, 68, 0.4);
+	color: #fca5a5;
+	font-size: 0.8rem;
+	text-align: center;
+	line-height: 1.3;
 }
 
 @media (max-width: 640px) {
@@ -253,9 +282,11 @@
 
 @media (prefers-reduced-motion: reduce) {
 	.button,
-	.buttonSecondary {
+	.buttonSecondary,
+	.buttonExport {
 		transition: none;
 	}
 }
+
 
 

@@ -10,6 +10,7 @@ const LINE_ALPHA_THRESHOLD = 24;
 const FILL_COLOUR = [255, 181, 0] as const;
 
 type Phase = "loading" | "ready" | "running" | "complete" | "error";
+type ExportState = "idle" | "preparing" | "recording" | "converting" | "downloading";
 
 type RenderAssets = {
 	fillMask: HTMLCanvasElement;
@@ -100,7 +101,6 @@ function parseDateString(dateStr: string): Date | null {
 	if (!dateStr || typeof dateStr !== "string") return null;
 	const str = dateStr.trim();
 
-	// Match YYYY-MM-DD or YYYY/MM/DD
 	const ymdMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
 	if (ymdMatch) {
 		const year = parseInt(ymdMatch[1], 10);
@@ -110,7 +110,6 @@ function parseDateString(dateStr: string): Date | null {
 		return Number.isNaN(d.getTime()) ? null : d;
 	}
 
-	// Match DD/MM/YYYY or DD-MM-YYYY
 	const dmyMatch = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
 	if (dmyMatch) {
 		const day = parseInt(dmyMatch[1], 10);
@@ -151,6 +150,150 @@ function calculateTargetPercentage(start: string, current: string, end: string) 
 	return Math.max(0, Math.min(100, fraction * 100));
 }
 
+function drawOffscreenCard(
+	ctx: CanvasRenderingContext2D,
+	fillTop: number,
+	percentage: number,
+	assets: RenderAssets,
+	portraitCanvas: HTMLCanvasElement,
+) {
+	const width = 1080;
+	const height = 1920;
+
+	// Black 9:16 background
+	ctx.fillStyle = "#000000";
+	ctx.fillRect(0, 0, width, height);
+
+	// Header Text layout - matching 1:1 web UI proportions (scale factor ~2.82x for 1080x1920)
+	ctx.textBaseline = "top";
+
+	// Title Main: "PM Modi’s Term is"
+	ctx.font = "700 68px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+	ctx.fillStyle = "#ffffff";
+	ctx.textAlign = "center";
+	const titleMainY = 100;
+	ctx.fillText("PM Modi’s Term is", width / 2, titleMainY);
+
+	// Title Sub: ${percentage}% Completed
+	ctx.font = "800 84px system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+	const pctText = `${percentage.toFixed(2)}%`;
+	const compText = " Completed";
+
+	const pctWidth = ctx.measureText(pctText).width;
+	const compWidth = ctx.measureText(compText).width;
+	const totalWidth = pctWidth + compWidth;
+	const startX = width / 2 - totalWidth / 2;
+	const titleSubY = 198;
+
+	ctx.textAlign = "left";
+	ctx.fillStyle = "#ffb500";
+	ctx.fillText(pctText, startX, titleSubY);
+
+	ctx.fillStyle = "#ffffff";
+	ctx.fillText(compText, startX + pctWidth, titleSubY);
+
+	// Render portrait frame onto portraitCanvas
+	const pCtx = portraitCanvas.getContext("2d");
+	if (pCtx) {
+		const top = Math.max(0, Math.min(assets.height, Math.round(fillTop)));
+		pCtx.fillStyle = "#000000";
+		pCtx.fillRect(0, 0, assets.width, assets.height);
+
+		if (top < assets.height) {
+			pCtx.drawImage(
+				assets.fillMask,
+				0,
+				top,
+				assets.width,
+				assets.height - top,
+				0,
+				top,
+				assets.width,
+				assets.height - top,
+			);
+		}
+
+		pCtx.drawImage(assets.frame, 0, 0, assets.width, assets.height);
+	}
+
+	// Fit portrait inside canvas container (matching .canvasContainer padding: 0 45px 68px 45px)
+	const containerX = 45;
+	const containerY = 320;
+	const containerW = width - 2 * containerX; // 990px
+	const containerH = height - containerY - 68; // 1532px
+
+	const scale = Math.min(containerW / assets.width, containerH / assets.height);
+
+	const dstW = assets.width * scale;
+	const dstH = assets.height * scale;
+	const dstX = containerX + (containerW - dstW) / 2;
+	const dstY = containerY + (containerH - dstH) / 2;
+
+	ctx.drawImage(portraitCanvas, dstX, dstY, dstW, dstH);
+}
+
+async function convertWebmToMp4(webmBlob: Blob): Promise<Blob> {
+	const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+	const { fetchFile, toBlobURL } = await import("@ffmpeg/util");
+
+	const ffmpeg = new FFmpeg();
+	const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+
+	await ffmpeg.load({
+		coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+		wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+	});
+
+	const inputName = "input.webm";
+	const outputName = "output.mp4";
+
+	await ffmpeg.writeFile(inputName, await fetchFile(webmBlob));
+
+	await ffmpeg.exec([
+		"-i",
+		inputName,
+		"-c:v",
+		"libx264",
+		"-c:a",
+		"aac",
+		"-pix_fmt",
+		"yuv420p",
+		"-r",
+		"30",
+		"-movflags",
+		"+faststart",
+		outputName,
+	]);
+
+	const data = await ffmpeg.readFile(outputName);
+	const mp4Blob = new Blob([data as unknown as BlobPart], { type: "video/mp4" });
+
+	try {
+		await ffmpeg.deleteFile(inputName);
+		await ffmpeg.deleteFile(outputName);
+		ffmpeg.terminate();
+	} catch {
+		// Ignore cleanup error
+	}
+
+	return mp4Blob;
+}
+
+function getExportLabel(state: ExportState): string {
+	switch (state) {
+		case "preparing":
+			return "Preparing…";
+		case "recording":
+			return "Recording…";
+		case "converting":
+			return "Converting…";
+		case "downloading":
+			return "Downloading…";
+		default:
+			return "Export MP4";
+	}
+}
+
 export default function ModiDrain() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const assetsRef = useRef<RenderAssets | null>(null);
@@ -168,17 +311,22 @@ export default function ModiDrain() {
 	const [audioList, setAudioList] = useState<string[]>(["reelAudio1.mp3"]);
 	const [selectedAudio, setSelectedAudio] = useState<string>("reelAudio1.mp3");
 
+	const [exportState, setExportState] = useState<ExportState>("idle");
+	const [exportError, setExportError] = useState<string | null>(null);
+
 	useEffect(() => {
 		fetch("/api/audio")
-			.then((res) => res.json())
+			.then((res) => res.json() as Promise<{ audios?: string[] }>)
 			.then((data) => {
 				if (data?.audios && Array.isArray(data.audios) && data.audios.length > 0) {
-					setAudioList(data.audios);
-					setSelectedAudio((prev) => (data.audios.includes(prev) ? prev : data.audios[0]));
+					const list = data.audios;
+					setAudioList(list);
+					setSelectedAudio((prev) => (list.includes(prev) ? prev : list[0]));
 				}
 			})
 			.catch(() => {});
 	}, []);
+
 
 	useEffect(() => {
 		const savedStart = localStorage.getItem(LOCAL_STORAGE_KEY_START);
@@ -254,7 +402,7 @@ export default function ModiDrain() {
 
 	const startDrain = useCallback(() => {
 		const assets = assetsRef.current;
-		if (!assets || phase === "loading" || phase === "running" || phase === "error") return;
+		if (!assets || phase === "loading" || phase === "running" || phase === "error" || exportState !== "idle") return;
 
 		stopAudio();
 
@@ -309,9 +457,10 @@ export default function ModiDrain() {
 		} else {
 			const onMetadata = () => {
 				audio.removeEventListener("loadedmetadata", onMetadata);
-				const duration = audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)
-					? audio.duration * 1000
-					: DRAIN_DURATION_MS;
+				const duration =
+					audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)
+						? audio.duration * 1000
+						: DRAIN_DURATION_MS;
 				runAnimationWithDuration(duration);
 			};
 			const onError = () => {
@@ -321,8 +470,192 @@ export default function ModiDrain() {
 			audio.addEventListener("loadedmetadata", onMetadata);
 			audio.addEventListener("error", onError);
 		}
-	}, [paint, phase, startDate, currentDate, endDate, selectedAudio, stopAudio]);
+	}, [paint, phase, startDate, currentDate, endDate, selectedAudio, stopAudio, exportState]);
 
+	const exportVideo = async () => {
+		if (exportState !== "idle" || phase === "loading" || phase === "error") return;
+
+		setExportError(null);
+		setExportState("preparing");
+		stopAudio();
+		if (animationFrameRef.current !== null) {
+			cancelAnimationFrame(animationFrameRef.current);
+			animationFrameRef.current = null;
+		}
+
+		let audioCtx: AudioContext | null = null;
+		let combinedStream: MediaStream | null = null;
+		let mediaRecorder: MediaRecorder | null = null;
+
+		try {
+			if (typeof document !== "undefined" && document.fonts) {
+				await document.fonts.ready;
+			}
+
+			const assets = assetsRef.current;
+			if (!assets) {
+				throw new Error("Portrait assets are not loaded yet.");
+			}
+
+			const audioResponse = await fetch(`/audio/${selectedAudio}`);
+			if (!audioResponse.ok) {
+				throw new Error(`Failed to load audio file: ${selectedAudio}`);
+			}
+			const audioArrayBuffer = await audioResponse.arrayBuffer();
+
+			const AudioContextClass =
+				window.AudioContext ||
+				(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+			audioCtx = new AudioContextClass();
+
+			const audioBuffer = await audioCtx.decodeAudioData(audioArrayBuffer);
+			const durationSec =
+				audioBuffer.duration && audioBuffer.duration > 0
+					? audioBuffer.duration
+					: DRAIN_DURATION_MS / 1000;
+			const durationMs = durationSec * 1000;
+
+			const sourceNode = audioCtx.createBufferSource();
+			sourceNode.buffer = audioBuffer;
+			const destNode = audioCtx.createMediaStreamDestination();
+			sourceNode.connect(destNode);
+
+			const exportCanvas = document.createElement("canvas");
+			exportCanvas.width = 1080;
+			exportCanvas.height = 1920;
+			const ctx = exportCanvas.getContext("2d");
+			if (!ctx) throw new Error("Could not get offscreen canvas 2d context.");
+
+			const portraitCanvas = document.createElement("canvas");
+			portraitCanvas.width = assets.width;
+			portraitCanvas.height = assets.height;
+
+			const canvasStream = exportCanvas.captureStream(30);
+			combinedStream = new MediaStream([
+				...canvasStream.getVideoTracks(),
+				...destNode.stream.getAudioTracks(),
+			]);
+
+			const completedPercentage = calculateTargetPercentage(startDate, currentDate, endDate);
+			const startLevel = assets.height * INITIAL_FILL_TOP;
+			const targetLevel = assets.height * (completedPercentage / 100);
+
+			let mimeType = "";
+			const preferredTypes = [
+				"video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+				"video/mp4;codecs=avc1,mp4a.40.2",
+				"video/mp4",
+				"video/webm;codecs=vp9,opus",
+				"video/webm;codecs=vp8,opus",
+				"video/webm",
+			];
+			for (const t of preferredTypes) {
+				if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) {
+					mimeType = t;
+					break;
+				}
+			}
+
+			mediaRecorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : undefined);
+			const chunks: Blob[] = [];
+			mediaRecorder.ondataavailable = (e) => {
+				if (e.data && e.data.size > 0) {
+					chunks.push(e.data);
+				}
+			};
+
+			const recordingPromise = new Promise<Blob>((resolve, reject) => {
+				if (!mediaRecorder) return reject(new Error("MediaRecorder not initialized"));
+				mediaRecorder.onstop = () => {
+					const recordedBlob = new Blob(chunks, {
+						type: mediaRecorder?.mimeType || mimeType || "video/webm",
+					});
+					resolve(recordedBlob);
+				};
+				mediaRecorder.onerror = (e) => {
+					reject(new Error("MediaRecorder error: " + (e as unknown as Error).message));
+				};
+			});
+
+			setExportState("recording");
+
+			const recordStartTime = performance.now();
+			sourceNode.start(0);
+			mediaRecorder.start();
+
+			await new Promise<void>((resolve) => {
+				const animate = (now: number) => {
+					const elapsedMs = now - recordStartTime;
+					const progress = Math.min(elapsedMs / durationMs, 1);
+					const fillTop = startLevel + (targetLevel - startLevel) * progress;
+					const currentPct = progress * completedPercentage;
+
+					drawOffscreenCard(ctx, fillTop, currentPct, assets, portraitCanvas);
+					paint(fillTop);
+					setPercentage(currentPct);
+
+					if (progress < 1) {
+						requestAnimationFrame(animate);
+					} else {
+						drawOffscreenCard(ctx, targetLevel, completedPercentage, assets, portraitCanvas);
+						paint(targetLevel);
+						setPercentage(completedPercentage);
+						setTimeout(resolve, 100);
+					}
+				};
+				requestAnimationFrame(animate);
+			});
+
+			if (mediaRecorder.state === "recording") {
+				mediaRecorder.stop();
+			}
+
+			const rawBlob = await recordingPromise;
+
+			let finalMp4Blob: Blob;
+			const isAlreadyH264Mp4 =
+				rawBlob.type.includes("mp4") &&
+				(rawBlob.type.includes("avc1") || rawBlob.type.includes("h264"));
+
+			if (isAlreadyH264Mp4) {
+				finalMp4Blob = rawBlob;
+			} else {
+				setExportState("converting");
+				finalMp4Blob = await convertWebmToMp4(rawBlob);
+			}
+
+			setExportState("downloading");
+
+			const sanitizedDate = (currentDate || getTodayString()).trim().replace(/[^a-zA-Z0-9-]/g, "-");
+			const downloadFilename = `modi-term-progress-${sanitizedDate}.mp4`;
+
+			const downloadUrl = URL.createObjectURL(finalMp4Blob);
+			const a = document.createElement("a");
+			a.href = downloadUrl;
+			a.download = downloadFilename;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+
+			setTimeout(() => {
+				URL.revokeObjectURL(downloadUrl);
+			}, 10000);
+		} catch (err) {
+			console.error("Export error:", err);
+			setExportError((err as Error).message || "Export failed. Please try again.");
+		} finally {
+			if (combinedStream) {
+				combinedStream.getTracks().forEach((track) => track.stop());
+			}
+			if (audioCtx && audioCtx.state !== "closed") {
+				try {
+					await audioCtx.close();
+				} catch {}
+			}
+			resetPortrait();
+			setExportState("idle");
+		}
+	};
 
 	useEffect(() => {
 		let cancelled = false;
@@ -380,10 +713,12 @@ export default function ModiDrain() {
 		};
 	}, [paint, stopAudio]);
 
+	const isDisabled = phase === "running" || exportState !== "idle";
+
 	return (
 		<main className={styles.page}>
 			<section className={styles.experience}>
-				<div className={styles.portrait} aria-busy={phase === "loading"}>
+				<div className={styles.portrait} aria-busy={phase === "loading" || exportState !== "idle"}>
 					<div className={styles.header}>
 						<h1 className={styles.titleMain}>PM Modi’s Term is</h1>
 						<h2 className={styles.titleSub}>
@@ -414,7 +749,7 @@ export default function ModiDrain() {
 								className={styles.selectInput}
 								value={selectedAudio}
 								onChange={(e) => setSelectedAudio(e.target.value)}
-								disabled={phase === "running"}
+								disabled={isDisabled}
 							>
 								{audioList.map((file) => (
 									<option key={file} value={file}>
@@ -434,7 +769,7 @@ export default function ModiDrain() {
 								className={styles.dateInput}
 								value={startDate}
 								onChange={(e) => setStartDate(e.target.value)}
-								disabled={phase === "running"}
+								disabled={isDisabled}
 							/>
 						</div>
 
@@ -448,7 +783,7 @@ export default function ModiDrain() {
 								className={styles.dateInput}
 								value={currentDate}
 								onChange={(e) => setCurrentDate(e.target.value)}
-								disabled={phase === "running"}
+								disabled={isDisabled}
 							/>
 						</div>
 
@@ -462,18 +797,17 @@ export default function ModiDrain() {
 								className={styles.dateInput}
 								value={endDate}
 								onChange={(e) => setEndDate(e.target.value)}
-								disabled={phase === "running"}
+								disabled={isDisabled}
 							/>
 						</div>
 					</div>
-
 
 					<div className={styles.buttonGroup}>
 						<button
 							className={styles.button}
 							type="button"
 							onClick={startDrain}
-							disabled={phase === "loading" || phase === "running" || phase === "error"}
+							disabled={phase === "loading" || phase === "running" || phase === "error" || exportState !== "idle"}
 						>
 							<span aria-hidden="true">▶</span>
 							Play
@@ -483,16 +817,26 @@ export default function ModiDrain() {
 							className={styles.buttonSecondary}
 							type="button"
 							onClick={resetPortrait}
-							disabled={phase === "loading" || phase === "error"}
+							disabled={phase === "loading" || phase === "error" || exportState !== "idle"}
 						>
 							<span aria-hidden="true">↺</span>
 							Reset
 						</button>
+
+						<button
+							className={styles.buttonExport}
+							type="button"
+							onClick={exportVideo}
+							disabled={phase === "loading" || phase === "running" || phase === "error" || exportState !== "idle"}
+						>
+							<span aria-hidden="true">⇩</span>
+							{getExportLabel(exportState)}
+						</button>
 					</div>
+
+					{exportError && <div className={styles.exportError}>{exportError}</div>}
 				</div>
 			</section>
 		</main>
 	);
 }
-
-
