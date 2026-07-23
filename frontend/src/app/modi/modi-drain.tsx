@@ -211,9 +211,6 @@ export default function ModiDrain() {
 		}
 
 		context.drawImage(assets.frame, 0, 0, assets.width, assets.height);
-
-		const currentPercent = Math.max(0, Math.min(100, ((assets.height - top) / assets.height) * 100));
-		setPercentage(currentPercent);
 	}, []);
 
 	const resetPortrait = useCallback(() => {
@@ -224,6 +221,7 @@ export default function ModiDrain() {
 		const assets = assetsRef.current;
 		if (assets) {
 			paint(assets.height * INITIAL_FILL_TOP);
+			setPercentage(0);
 			setPhase("ready");
 		}
 	}, [paint]);
@@ -237,14 +235,18 @@ export default function ModiDrain() {
 			animationFrameRef.current = null;
 		}
 
-		const targetPercentage = calculateTargetPercentage(startDate, currentDate, endDate);
+		const completedPercentage = calculateTargetPercentage(startDate, currentDate, endDate);
+		const remainingPercentage = 100 - completedPercentage;
+
 		const startLevel = assets.height * INITIAL_FILL_TOP;
-		const targetLevel = assets.height * (1 - targetPercentage / 100);
+		const targetLevel = assets.height * (completedPercentage / 100);
 
 		paint(startLevel);
+		setPercentage(0);
 
 		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 			paint(targetLevel);
+			setPercentage(remainingPercentage);
 			setPhase("complete");
 			return;
 		}
@@ -256,6 +258,7 @@ export default function ModiDrain() {
 			const progress = Math.min((time - startedAt) / DRAIN_DURATION_MS, 1);
 			const fillTop = startLevel + (targetLevel - startLevel) * progress;
 			paint(fillTop);
+			setPercentage(progress * remainingPercentage);
 
 			if (progress < 1) {
 				animationFrameRef.current = requestAnimationFrame(animate);
@@ -307,6 +310,7 @@ export default function ModiDrain() {
 				}
 
 				paint(frame.naturalHeight * INITIAL_FILL_TOP);
+				setPercentage(0);
 				setPhase("ready");
 			} catch {
 				if (!cancelled) setPhase("error");
@@ -331,7 +335,7 @@ export default function ModiDrain() {
 						<h1 className={styles.titleMain}>PM Modi’s Term is</h1>
 						<h2 className={styles.titleSub}>
 							<span className={styles.percentText}>{percentage.toFixed(2)}%</span>
-							<span>Complete</span>
+							<span>Remaining</span>
 						</h2>
 					</div>
 
