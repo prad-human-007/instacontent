@@ -38,6 +38,11 @@ type PublicationRecord = {
 	updatedAt: string;
 };
 
+type StoredPublicationRecord = {
+	etag: string;
+	record: PublicationRecord;
+};
+
 type StreamEvent =
 	| {
 			type: "stage";
@@ -91,12 +96,15 @@ async function isMp4(file: Blob): Promise<boolean> {
 async function readRecord(
 	bucket: R2Bucket,
 	key: string,
-): Promise<PublicationRecord | null> {
+): Promise<StoredPublicationRecord | null> {
 	const object = await bucket.get(key);
 	if (!object) return null;
 
 	try {
-		return await object.json<PublicationRecord>();
+		return {
+			etag: object.etag,
+			record: await object.json<PublicationRecord>(),
+		};
 	} catch {
 		return null;
 	}
@@ -216,40 +224,65 @@ export async function POST(request: Request): Promise<Response> {
 		updatedAt: timestamp,
 	};
 
-	const lock = await config.mediaBucket.put(recordKey, JSON.stringify(record), {
+	let lock = await config.mediaBucket.put(recordKey, JSON.stringify(record), {
 		httpMetadata: {
 			cacheControl: "private, no-store",
 			contentType: "application/json",
 		},
-		onlyIf: new Headers({ "if-none-match": "*" }),
+		onlyIf: { etagDoesNotMatch: "*" },
 	});
 
 	if (!lock) {
 		const existing = await readRecord(config.mediaBucket, recordKey);
-		if (existing?.state === "published" && existing.publishedMediaId) {
+		if (
+			existing?.record.state === "published" &&
+			existing.record.publishedMediaId
+		) {
 			return streamResponse([
 				{
 					type: "published",
-					mediaId: existing.publishedMediaId,
+					mediaId: existing.record.publishedMediaId,
 					duplicate: true,
 				},
 			]);
 		}
-		return streamResponse(
-			[
-				{
-					type: "error",
-					code: "DUPLICATE_PUBLICATION",
-					message: "This generated video already has a publication attempt.",
-					retrySafe: false,
+
+		// A failed record with no video never reached Meta, so reclaim it with an
+		// ETag guard. Failed records whose video exists remain blocked because
+		// their publication attempt may already have reached Instagram.
+		if (
+			existing?.record.state === "failed" &&
+			!(await config.mediaBucket.head(existing.record.objectKey))
+		) {
+			lock = await config.mediaBucket.put(recordKey, JSON.stringify(record), {
+				httpMetadata: {
+					cacheControl: "private, no-store",
+					contentType: "application/json",
 				},
-			],
-			409,
-		);
+				onlyIf: { etagMatches: existing.etag },
+			});
+		}
+
+		if (!lock) {
+			return streamResponse(
+				[
+					{
+						type: "error",
+						code: "DUPLICATE_PUBLICATION",
+						message: "This generated video already has a publication attempt.",
+						retrySafe: false,
+					},
+				],
+				409,
+			);
+		}
 	}
 
 	try {
-		await config.mediaBucket.put(objectKey, video.stream(), {
+		// R2 requires a known content length for stream uploads. Multipart files
+		// parsed by Next.js expose an unknown-length stream in local OpenNext,
+		// so use the already size-capped file buffer for a reliable R2 upload.
+		await config.mediaBucket.put(objectKey, await video.arrayBuffer(), {
 			httpMetadata: {
 				cacheControl: "public, max-age=86400",
 				contentDisposition: "inline",
@@ -260,7 +293,14 @@ export async function POST(request: Request): Promise<Response> {
 				purpose: "instagram-reel",
 			},
 		});
-	} catch {
+	} catch (error) {
+		console.error(
+			JSON.stringify({
+				code: "R2_UPLOAD_FAILED",
+				errorName: error instanceof Error ? error.name : "UnknownError",
+				event: "instagram_publish_failed",
+			}),
+		);
 		record = { ...record, state: "failed", updatedAt: new Date().toISOString() };
 		try {
 			await writeRecord(config.mediaBucket, recordKey, record);
