@@ -166,6 +166,88 @@ function calculateTargetPercentage(start: string, current: string, end: string) 
 	return Math.max(0, Math.min(100, fraction * 100));
 }
 
+function formatDateLong(dateStr: string): string {
+	const d = parseDateString(dateStr);
+	if (!d) return dateStr;
+	const day = d.getUTCDate();
+	const monthNames = [
+		"January",
+		"February",
+		"March",
+		"April",
+		"May",
+		"June",
+		"July",
+		"August",
+		"September",
+		"October",
+		"November",
+		"December",
+	];
+	const month = monthNames[d.getUTCMonth()];
+	const year = d.getUTCFullYear();
+	return `${day} ${month} ${year}`;
+}
+
+function getJourneyFractionPhrase(pct: number): string {
+	const benchmarks = [
+		{ threshold: 90, label: "nine-tenths" },
+		{ threshold: 80, label: "four-fifths" },
+		{ threshold: 75, label: "three-quarters" },
+		{ threshold: 66.67, label: "two-thirds" },
+		{ threshold: 60, label: "three-fifths" },
+		{ threshold: 50, label: "half" },
+		{ threshold: 40, label: "two-fifths" },
+		{ threshold: 33.33, label: "one-third" },
+		{ threshold: 25, label: "one-quarter" },
+		{ threshold: 20, label: "one-fifth" },
+		{ threshold: 10, label: "one-tenth" },
+	];
+
+	for (const b of benchmarks) {
+		if (Math.abs(pct - b.threshold) < 0.01) {
+			return `${b.label}`;
+		}
+		if (pct > b.threshold) {
+			return `more than ${b.label}`;
+		}
+	}
+	return "less than one-tenth";
+}
+
+function generateDefaultCaption(startStr: string, currentStr: string, endStr: string): string {
+	const formattedDate = formatDateLong(currentStr || getTodayString());
+	const pct = calculateTargetPercentage(startStr, currentStr, endStr);
+	const completedPctStr = pct.toFixed(2);
+	const remainingPctStr = Math.max(0, 100 - pct).toFixed(2);
+
+	const startDateObj = parseDateString(startStr);
+	const currentDateObj = parseDateString(currentStr);
+	const endDateObj = parseDateString(endStr);
+
+	let elapsedDays = 0;
+	let totalDays = 0;
+
+	if (startDateObj && currentDateObj && endDateObj) {
+		const startMs = startDateObj.getTime();
+		const currentMs = currentDateObj.getTime();
+		const endMs = endDateObj.getTime();
+
+		totalDays = Math.max(1, Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)));
+		elapsedDays = Math.max(0, Math.min(totalDays, Math.round((currentMs - startMs) / (1000 * 60 * 60 * 24))));
+	}
+
+	const fractionPhrase = getJourneyFractionPhrase(pct);
+
+	return `${formattedDate}
+
+PM Modi’s third term is ${completedPctStr}% complete 🧭
+⏳ Day ${elapsedDays.toLocaleString()} of ${totalDays.toLocaleString()} — ${fractionPhrase} of the journey has passed.
+🟡 ${remainingPctStr}% of the projected term remains.
+
+#ModiPercent #NeutralCountdown #ProgressTracker #PMModi #modi`;
+}
+
 function drawOffscreenCard(
 	ctx: CanvasRenderingContext2D,
 	fillTop: number,
@@ -340,6 +422,7 @@ export default function ModiDrain() {
 	const animationFrameRef = useRef<number | null>(null);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const generatedVideoBlobRef = useRef<Blob | null>(null);
+	const isCaptionUserEdited = useRef<boolean>(false);
 
 	const [phase, setPhase] = useState<Phase>("loading");
 	const [percentage, setPercentage] = useState<number>(0);
@@ -706,11 +789,9 @@ export default function ModiDrain() {
 				filename: downloadFilename,
 				size: finalMp4Blob.size,
 			});
-			setCaption((currentCaption) =>
-				currentCaption.trim()
-					? currentCaption
-					: `PM Modi’s term is ${completedPercentage.toFixed(2)}% complete as of ${currentDate || getTodayString()}.`,
-			);
+			if (!isCaptionUserEdited.current || !caption.trim()) {
+				setCaption(generateDefaultCaption(startDate, currentDate, endDate));
+			}
 			setPublishingState("video_ready");
 
 			const downloadUrl = URL.createObjectURL(finalMp4Blob);
@@ -1050,8 +1131,11 @@ export default function ModiDrain() {
 									className={styles.captionInput}
 									value={caption}
 									maxLength={2200}
-									rows={4}
-									onChange={(event) => setCaption(event.target.value)}
+									rows={8}
+									onChange={(event) => {
+										isCaptionUserEdited.current = true;
+										setCaption(event.target.value);
+									}}
 									disabled={isPublishing || publishingState === "published"}
 								/>
 
