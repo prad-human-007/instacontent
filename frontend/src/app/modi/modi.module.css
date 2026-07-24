@@ -410,13 +410,13 @@
 	line-height: 1.3;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
 	.page {
 		min-height: 100vh;
 		min-height: 100svh;
 		overflow-y: auto;
 		overflow-x: hidden;
-		padding: 1rem 0 2.5rem 0;
+		padding: 1.5rem 1rem 2.5rem 1rem;
 		align-items: flex-start;
 	}
 
@@ -430,8 +430,8 @@
 	}
 
 	.portrait {
-		width: 100%;
-		max-width: 100%;
+		width: min(90vw, 360px);
+		max-width: 360px;
 		height: auto;
 		aspect-ratio: 9 / 16;
 		flex-shrink: 0;
@@ -439,10 +439,27 @@
 	}
 
 	.controls {
-		width: 100%;
-		max-width: 100%;
+		width: min(90vw, 360px);
+		max-width: 360px;
 		max-height: none;
 		overflow-y: visible;
+		padding: 0;
+	}
+}
+
+@media (max-width: 480px) {
+	.page {
+		padding: 1rem 0 2.5rem 0;
+	}
+
+	.portrait {
+		width: 100%;
+		max-width: 100%;
+	}
+
+	.controls {
+		width: 100%;
+		max-width: 100%;
 		padding: 0 1rem;
 	}
 }
