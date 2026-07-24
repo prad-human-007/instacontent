@@ -150,7 +150,7 @@ export async function requireInstagramAdministrator(request: Request): Promise<s
 		const validSignature = await crypto.subtle.verify(
 			"RSASSA-PKCS1-v1_5",
 			cryptoKey,
-			decodeBase64Url(parts[2]),
+			decodeBase64Url(parts[2]).buffer as ArrayBuffer,
 			new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
 		);
 		const email = payload.email.trim().toLowerCase();
