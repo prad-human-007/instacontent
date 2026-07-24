@@ -176,6 +176,7 @@
 .button,
 .buttonSecondary,
 .buttonExport,
+.buttonSaveLocal,
 .buttonInstagram {
 	min-width: 9.5rem;
 	min-height: 3rem;
@@ -305,9 +306,32 @@
 	box-shadow: 0 6px 18px rgba(225, 48, 108, 0.32);
 }
 
+.buttonSaveLocal {
+	border: 1.5px solid var(--yellow);
+	background: rgba(243, 178, 62, 0.12);
+	color: var(--yellow);
+}
+
+.buttonSaveLocal:hover:not(:disabled) {
+	background: var(--yellow);
+	color: #050505;
+	transform: translateY(-2px);
+	box-shadow: 0 6px 16px rgba(243, 178, 62, 0.3);
+}
+
+.instagramSection {
+	display: flex;
+	flex-direction: column;
+	gap: 0.65rem;
+	margin-top: 0.35rem;
+	padding-top: 0.75rem;
+	border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .button:focus-visible,
 .buttonSecondary:focus-visible,
 .buttonExport:focus-visible,
+.buttonSaveLocal:focus-visible,
 .buttonInstagram:focus-visible {
 	outline: 3px solid var(--yellow);
 	outline-offset: 4px;
@@ -316,6 +340,7 @@
 .button:disabled,
 .buttonSecondary:disabled,
 .buttonExport:disabled,
+.buttonSaveLocal:disabled,
 .buttonInstagram:disabled {
 	cursor: not-allowed;
 	opacity: 0.4;

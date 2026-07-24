@@ -386,9 +386,9 @@ function getExportLabel(state: ExportState): string {
 		case "converting":
 			return "Converting…";
 		case "downloading":
-			return "Downloading…";
+			return "Finalizing…";
 		default:
-			return "Export MP4";
+			return "Generate Video";
 	}
 }
 
@@ -793,18 +793,6 @@ export default function ModiDrain() {
 				setCaption(generateDefaultCaption(startDate, currentDate, endDate));
 			}
 			setPublishingState("video_ready");
-
-			const downloadUrl = URL.createObjectURL(finalMp4Blob);
-			const a = document.createElement("a");
-			a.href = downloadUrl;
-			a.download = downloadFilename;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-
-			setTimeout(() => {
-				URL.revokeObjectURL(downloadUrl);
-			}, 10000);
 		} catch (err) {
 			console.error("Export error:", err);
 			setExportError((err as Error).message || "Export failed. Please try again.");
@@ -821,6 +809,21 @@ export default function ModiDrain() {
 			setExportState("idle");
 		}
 	};
+
+	const saveVideoLocally = useCallback(() => {
+		const blob = generatedVideoBlobRef.current;
+		if (!blob || !generatedVideo) return;
+		const downloadUrl = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = downloadUrl;
+		a.download = generatedVideo.filename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		setTimeout(() => {
+			URL.revokeObjectURL(downloadUrl);
+		}, 10000);
+	}, [generatedVideo]);
 
 	const postToInstagram = async () => {
 		const videoBlob = generatedVideoBlobRef.current;
@@ -1109,7 +1112,7 @@ export default function ModiDrain() {
 							onClick={exportVideo}
 							disabled={phase === "loading" || phase === "running" || phase === "error" || exportState !== "idle"}
 						>
-							<span aria-hidden="true">⇩</span>
+							<span aria-hidden="true">🎬</span>
 							{getExportLabel(exportState)}
 						</button>
 
@@ -1123,35 +1126,46 @@ export default function ModiDrain() {
 									</span>
 								</div>
 
-								<label htmlFor="instagramCaption" className={styles.label}>
-									Instagram caption
-								</label>
-								<textarea
-									id="instagramCaption"
-									className={styles.captionInput}
-									value={caption}
-									maxLength={2200}
-									rows={8}
-									onChange={(event) => {
-										isCaptionUserEdited.current = true;
-										setCaption(event.target.value);
-									}}
-									disabled={isPublishing || publishingState === "published"}
-								/>
-
 								<button
-									className={styles.buttonInstagram}
+									className={styles.buttonSaveLocal}
 									type="button"
-									onClick={postToInstagram}
-									disabled={
-										isPublishing ||
-										publishingState === "published" ||
-										!caption.trim()
-									}
+									onClick={saveVideoLocally}
 								>
-									<span aria-hidden="true">◎</span>
-									{getPublishingLabel(publishingState)}
+									<span aria-hidden="true">💾</span>
+									Save Video Locally
 								</button>
+
+								<div className={styles.instagramSection}>
+									<label htmlFor="instagramCaption" className={styles.label}>
+										Instagram caption
+									</label>
+									<textarea
+										id="instagramCaption"
+										className={styles.captionInput}
+										value={caption}
+										maxLength={2200}
+										rows={8}
+										onChange={(event) => {
+											isCaptionUserEdited.current = true;
+											setCaption(event.target.value);
+										}}
+										disabled={isPublishing || publishingState === "published"}
+									/>
+
+									<button
+										className={styles.buttonInstagram}
+										type="button"
+										onClick={postToInstagram}
+										disabled={
+											isPublishing ||
+											publishingState === "published" ||
+											!caption.trim()
+										}
+									>
+										<span aria-hidden="true">◎</span>
+										{getPublishingLabel(publishingState)}
+									</button>
+								</div>
 							</div>
 						)}
 					</div>
