@@ -12,6 +12,21 @@ const FILL_COLOUR = [243, 178, 62] as const;
 
 type Phase = "loading" | "ready" | "running" | "complete" | "error";
 type ExportState = "idle" | "preparing" | "recording" | "converting" | "downloading";
+type PublishingState =
+	| "idle"
+	| "video_ready"
+	| "uploading_video"
+	| "preparing_reel"
+	| "instagram_processing"
+	| "publishing"
+	| "published"
+	| "failed";
+
+type GeneratedVideo = {
+	exportId: string;
+	filename: string;
+	size: number;
+};
 
 type RenderAssets = {
 	fillMask: HTMLCanvasElement;
@@ -295,11 +310,36 @@ function getExportLabel(state: ExportState): string {
 	}
 }
 
+function getPublishingLabel(state: PublishingState): string {
+	switch (state) {
+		case "uploading_video":
+			return "Uploading video…";
+		case "preparing_reel":
+			return "Preparing Reel…";
+		case "instagram_processing":
+			return "Instagram processing…";
+		case "publishing":
+			return "Publishing…";
+		case "published":
+			return "Published successfully";
+		default:
+			return "Post to Instagram";
+	}
+}
+
+async function createExportId(blob: Blob): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+	return [...new Uint8Array(digest)]
+		.map((byte) => byte.toString(16).padStart(2, "0"))
+		.join("");
+}
+
 export default function ModiDrain() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const assetsRef = useRef<RenderAssets | null>(null);
 	const animationFrameRef = useRef<number | null>(null);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
+	const generatedVideoBlobRef = useRef<Blob | null>(null);
 
 	const [phase, setPhase] = useState<Phase>("loading");
 	const [percentage, setPercentage] = useState<number>(0);
@@ -314,6 +354,11 @@ export default function ModiDrain() {
 
 	const [exportState, setExportState] = useState<ExportState>("idle");
 	const [exportError, setExportError] = useState<string | null>(null);
+	const [generatedVideo, setGeneratedVideo] = useState<GeneratedVideo | null>(null);
+	const [caption, setCaption] = useState<string>("");
+	const [publishingState, setPublishingState] = useState<PublishingState>("idle");
+	const [publishingMessage, setPublishingMessage] = useState<string | null>(null);
+	const [publishedMediaId, setPublishedMediaId] = useState<string | null>(null);
 
 	useEffect(() => {
 		fetch("/api/audio")
@@ -478,9 +523,22 @@ export default function ModiDrain() {
 	}, [paint, phase, startDate, currentDate, endDate, selectedAudio, stopAudio, exportState]);
 
 	const exportVideo = async () => {
-		if (exportState !== "idle" || phase === "loading" || phase === "error") return;
+		if (
+			exportState !== "idle" ||
+			phase === "loading" ||
+			phase === "error" ||
+			["uploading_video", "preparing_reel", "instagram_processing", "publishing"].includes(
+				publishingState,
+			)
+		)
+			return;
 
 		setExportError(null);
+		setPublishingMessage(null);
+		setPublishedMediaId(null);
+		setPublishingState("idle");
+		setGeneratedVideo(null);
+		generatedVideoBlobRef.current = null;
 		setExportState("preparing");
 		stopAudio();
 		if (animationFrameRef.current !== null) {
@@ -640,6 +698,20 @@ export default function ModiDrain() {
 
 			const sanitizedDate = (currentDate || getTodayString()).trim().replace(/[^a-zA-Z0-9-]/g, "-");
 			const downloadFilename = `modi-term-progress-${sanitizedDate}.mp4`;
+			const exportId = await createExportId(finalMp4Blob);
+
+			generatedVideoBlobRef.current = finalMp4Blob;
+			setGeneratedVideo({
+				exportId,
+				filename: downloadFilename,
+				size: finalMp4Blob.size,
+			});
+			setCaption((currentCaption) =>
+				currentCaption.trim()
+					? currentCaption
+					: `PM Modi’s term is ${completedPercentage.toFixed(2)}% complete as of ${currentDate || getTodayString()}.`,
+			);
+			setPublishingState("video_ready");
 
 			const downloadUrl = URL.createObjectURL(finalMp4Blob);
 			const a = document.createElement("a");
@@ -666,6 +738,116 @@ export default function ModiDrain() {
 			}
 			resetPortrait();
 			setExportState("idle");
+		}
+	};
+
+	const postToInstagram = async () => {
+		const videoBlob = generatedVideoBlobRef.current;
+		if (
+			!generatedVideo ||
+			!videoBlob ||
+			!caption.trim() ||
+			["uploading_video", "preparing_reel", "instagram_processing", "publishing"].includes(
+				publishingState,
+			)
+		) {
+			return;
+		}
+
+		setPublishingMessage(null);
+		setPublishedMediaId(null);
+		setPublishingState("uploading_video");
+
+		try {
+			const formData = new FormData();
+			formData.append("video", videoBlob, generatedVideo.filename);
+			formData.append("caption", caption.trim());
+			formData.append("exportId", generatedVideo.exportId);
+
+			const response = await fetch("/api/instagram/publish", {
+				method: "POST",
+				body: formData,
+			});
+
+			const responseContentType = response.headers.get("content-type") ?? "";
+			if (!response.ok && responseContentType.includes("application/json")) {
+				const body = (await response.json().catch(() => null)) as {
+					error?: { message?: unknown };
+				} | null;
+				throw new Error(
+					typeof body?.error?.message === "string"
+						? body.error.message
+						: "Instagram publishing request failed.",
+				);
+			}
+
+			if (!response.body) {
+				throw new Error("Instagram publishing request failed.");
+			}
+			if (!responseContentType.includes("application/x-ndjson")) {
+				throw new Error(
+					"Instagram publishing is unavailable. Sign in through Cloudflare Access and try again.",
+				);
+			}
+
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			let published = false;
+
+			const handleLine = (line: string) => {
+				if (!line.trim()) return;
+				const event = JSON.parse(line) as {
+					type?: unknown;
+					stage?: unknown;
+					mediaId?: unknown;
+					message?: unknown;
+				};
+
+				if (
+					event.type === "stage" &&
+					(event.stage === "preparing_reel" ||
+						event.stage === "instagram_processing" ||
+						event.stage === "publishing")
+				) {
+					setPublishingState(event.stage);
+					return;
+				}
+				if (event.type === "published" && typeof event.mediaId === "string") {
+					published = true;
+					setPublishedMediaId(event.mediaId);
+					setPublishingMessage("Reel published to @pmmodiprogressbar.");
+					setPublishingState("published");
+					return;
+				}
+				if (event.type === "error") {
+					throw new Error(
+						typeof event.message === "string"
+							? event.message
+							: "Instagram publishing failed.",
+					);
+				}
+			};
+
+			while (true) {
+				const { done, value } = await reader.read();
+				buffer += decoder.decode(value, { stream: !done });
+				const lines = buffer.split("\n");
+				buffer = lines.pop() ?? "";
+				for (const line of lines) handleLine(line);
+				if (done) break;
+			}
+			if (buffer.trim()) handleLine(buffer);
+			if (!published) {
+				throw new Error("Instagram publishing ended without confirmation.");
+			}
+		} catch (error) {
+			setPublishingState("failed");
+			setPublishingMessage(
+				error instanceof Error
+					? error.message
+					: "Instagram publishing failed. Export again before retrying.",
+			);
 		}
 	};
 
@@ -725,7 +907,12 @@ export default function ModiDrain() {
 		};
 	}, [paint, stopAudio]);
 
-	const isDisabled = phase === "running" || exportState !== "idle";
+	const isPublishing =
+		publishingState === "uploading_video" ||
+		publishingState === "preparing_reel" ||
+		publishingState === "instagram_processing" ||
+		publishingState === "publishing";
+	const isDisabled = phase === "running" || exportState !== "idle" || isPublishing;
 
 	return (
 		<main className={styles.page}>
@@ -844,9 +1031,62 @@ export default function ModiDrain() {
 							<span aria-hidden="true">⇩</span>
 							{getExportLabel(exportState)}
 						</button>
+
+						{generatedVideo && (
+							<div className={styles.instagramPanel}>
+								<div className={styles.videoReady}>
+									<span className={styles.statusDot} aria-hidden="true" />
+									Video ready
+									<span className={styles.videoSize}>
+										{(generatedVideo.size / (1024 * 1024)).toFixed(1)} MB
+									</span>
+								</div>
+
+								<label htmlFor="instagramCaption" className={styles.label}>
+									Instagram caption
+								</label>
+								<textarea
+									id="instagramCaption"
+									className={styles.captionInput}
+									value={caption}
+									maxLength={2200}
+									rows={4}
+									onChange={(event) => setCaption(event.target.value)}
+									disabled={isPublishing || publishingState === "published"}
+								/>
+
+								<button
+									className={styles.buttonInstagram}
+									type="button"
+									onClick={postToInstagram}
+									disabled={
+										isPublishing ||
+										publishingState === "published" ||
+										!caption.trim()
+									}
+								>
+									<span aria-hidden="true">◎</span>
+									{getPublishingLabel(publishingState)}
+								</button>
+							</div>
+						)}
 					</div>
 
 					{exportError && <div className={styles.exportError}>{exportError}</div>}
+					{publishingMessage && (
+						<div
+							className={
+								publishingState === "published"
+									? styles.publishSuccess
+									: styles.exportError
+							}
+						>
+							{publishingMessage}
+							{publishedMediaId && (
+								<span className={styles.mediaId}>Media ID: {publishedMediaId}</span>
+							)}
+						</div>
+					)}
 				</div>
 			</section>
 		</main>

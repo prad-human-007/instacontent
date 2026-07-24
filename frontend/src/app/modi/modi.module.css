@@ -175,7 +175,8 @@
 
 .button,
 .buttonSecondary,
-.buttonExport {
+.buttonExport,
+.buttonInstagram {
 	min-width: 9.5rem;
 	min-height: 3rem;
 	border-radius: 999px;
@@ -238,18 +239,106 @@
 	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
 }
 
+.instagramPanel {
+	display: flex;
+	flex-direction: column;
+	gap: 0.65rem;
+	padding-top: 0.35rem;
+}
+
+.videoReady {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+	color: #bbf7d0;
+	font-size: 0.78rem;
+	font-weight: 700;
+}
+
+.statusDot {
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 50%;
+	background: #22c55e;
+	box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15);
+}
+
+.videoSize {
+	margin-left: auto;
+	color: #a1a1aa;
+	font-weight: 500;
+}
+
+.captionInput {
+	resize: vertical;
+	min-height: 5.5rem;
+	max-height: 12rem;
+	background: #14171c;
+	border: 1px solid rgba(255, 255, 255, 0.15);
+	border-radius: 8px;
+	color: #ffffff;
+	padding: 0.65rem 0.8rem;
+	font: inherit;
+	font-size: 0.82rem;
+	line-height: 1.4;
+	outline: none;
+}
+
+.captionInput:focus {
+	border-color: var(--yellow);
+	box-shadow: 0 0 0 2px rgba(243, 178, 62, 0.25);
+}
+
+.captionInput:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+.buttonInstagram {
+	border: 1.5px solid #e1306c;
+	background: linear-gradient(135deg, #833ab4, #e1306c, #f77737);
+	color: #ffffff;
+}
+
+.buttonInstagram:hover:not(:disabled) {
+	transform: translateY(-2px);
+	box-shadow: 0 6px 18px rgba(225, 48, 108, 0.32);
+}
+
 .button:focus-visible,
 .buttonSecondary:focus-visible,
-.buttonExport:focus-visible {
+.buttonExport:focus-visible,
+.buttonInstagram:focus-visible {
 	outline: 3px solid var(--yellow);
 	outline-offset: 4px;
 }
 
 .button:disabled,
 .buttonSecondary:disabled,
-.buttonExport:disabled {
+.buttonExport:disabled,
+.buttonInstagram:disabled {
 	cursor: not-allowed;
 	opacity: 0.4;
+}
+
+.publishSuccess {
+	margin-top: 0.5rem;
+	padding: 0.6rem 0.8rem;
+	border-radius: 8px;
+	background: rgba(34, 197, 94, 0.14);
+	border: 1px solid rgba(34, 197, 94, 0.4);
+	color: #bbf7d0;
+	font-size: 0.8rem;
+	text-align: center;
+	line-height: 1.4;
+}
+
+.mediaId {
+	display: block;
+	margin-top: 0.25rem;
+	color: #86efac;
+	font-family: monospace;
+	font-size: 0.72rem;
 }
 
 .exportError {
@@ -283,10 +372,10 @@
 @media (prefers-reduced-motion: reduce) {
 	.button,
 	.buttonSecondary,
-	.buttonExport {
+	.buttonExport,
+	.buttonInstagram {
 		transition: none;
 	}
 }
-
 
 

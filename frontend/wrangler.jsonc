@@ -15,6 +15,9 @@
 		"nodejs_compat",
 		"global_fetch_strictly_public"
 	],
+	// Keep non-secret values configured in the dashboard. Secrets are always
+	// preserved separately by Wrangler.
+	"keep_vars": true,
 	"assets": {
 		"binding": "ASSETS",
 		"directory": ".open-next/assets"
@@ -30,6 +33,15 @@
 			// see https://opennext.js.org/cloudflare/caching
 			"binding": "WORKER_SELF_REFERENCE",
 			"service": "instacontent"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "INSTAGRAM_MEDIA",
+			"bucket_name": "instacontent-instagram-media",
+			// A real Reel test from `next dev` must upload to remote R2 so Meta
+			// can fetch the object through its public HTTPS domain.
+			"remote": true
 		}
 	],
 	"observability": {
