@@ -8,7 +8,7 @@ const INITIAL_FILL_TOP = 0;
 const DRAIN_DURATION_MS = 6000;
 const EXTRA_HOLD_MS = 2000;
 const LINE_ALPHA_THRESHOLD = 24;
-const FILL_COLOUR = [243, 178, 62] as const;
+const FILL_COLOUR = [244, 185, 64] as const;
 
 type Phase = "loading" | "ready" | "running" | "complete" | "error";
 type ExportState = "idle" | "preparing" | "recording" | "converting" | "downloading";
@@ -284,7 +284,7 @@ function drawOffscreenCard(
 	const titleSubY = 290;
 
 	ctx.textAlign = "left";
-	ctx.fillStyle = "#F3B23E";
+	ctx.fillStyle = "#f4b940";
 	ctx.fillText(pctText, startX, titleSubY);
 
 	ctx.fillStyle = "#ffffff";
@@ -330,7 +330,18 @@ function drawOffscreenCard(
 	ctx.drawImage(portraitCanvas, dstX, dstY, dstW, dstH);
 }
 
-async function convertWebmToMp4(webmBlob: Blob): Promise<Blob> {
+async function isMp4Container(blob: Blob): Promise<boolean> {
+	const header = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+	return (
+		header.length >= 12 &&
+		header[4] === 0x66 &&
+		header[5] === 0x74 &&
+		header[6] === 0x79 &&
+		header[7] === 0x70
+	);
+}
+
+async function normalizeRecordingToMp4(recordedBlob: Blob): Promise<Blob> {
 	const { FFmpeg } = await import("@ffmpeg/ffmpeg");
 	const { fetchFile, toBlobURL } = await import("@ffmpeg/util");
 
@@ -342,26 +353,72 @@ async function convertWebmToMp4(webmBlob: Blob): Promise<Blob> {
 		wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
 	});
 
-	const inputName = "input.webm";
+	const inputIsMp4 = await isMp4Container(recordedBlob);
+	const inputName = inputIsMp4 ? "input.mp4" : "input.webm";
 	const outputName = "output.mp4";
+	const recordedMimeType = recordedBlob.type.toLowerCase();
+	const canCopyInstagramCodecs =
+		inputIsMp4 &&
+		/(?:avc1|h264)/.test(recordedMimeType) &&
+		/(?:mp4a|aac)/.test(recordedMimeType);
 
-	await ffmpeg.writeFile(inputName, await fetchFile(webmBlob));
+	await ffmpeg.writeFile(inputName, await fetchFile(recordedBlob));
 
-	await ffmpeg.exec([
-		"-i",
-		inputName,
-		"-c:v",
-		"libx264",
-		"-c:a",
-		"aac",
-		"-pix_fmt",
-		"yuv420p",
-		"-r",
-		"30",
-		"-movflags",
-		"+faststart",
-		outputName,
-	]);
+	if (canCopyInstagramCodecs) {
+		// Safari/iOS MediaRecorder can return fragmented MP4. Flatten it into
+		// a regular fast-start MP4 while preserving its H.264/AAC streams.
+		await ffmpeg.exec([
+			"-fflags",
+			"+genpts",
+			"-i",
+			inputName,
+			"-map",
+			"0:v:0",
+			"-map",
+			"0:a:0?",
+			"-c",
+			"copy",
+			"-avoid_negative_ts",
+			"make_zero",
+			"-map_metadata",
+			"-1",
+			"-movflags",
+			"+faststart",
+			outputName,
+		]);
+	} else {
+		await ffmpeg.exec([
+			"-fflags",
+			"+genpts",
+			"-i",
+			inputName,
+			"-map",
+			"0:v:0",
+			"-map",
+			"0:a:0?",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"veryfast",
+			"-crf",
+			"23",
+			"-c:a",
+			"aac",
+			"-b:a",
+			"128k",
+			"-pix_fmt",
+			"yuv420p",
+			"-r",
+			"30",
+			"-avoid_negative_ts",
+			"make_zero",
+			"-map_metadata",
+			"-1",
+			"-movflags",
+			"+faststart",
+			outputName,
+		]);
+	}
 
 	const data = await ffmpeg.readFile(outputName);
 	const mp4Blob = new Blob([data as unknown as BlobPart], { type: "video/mp4" });
@@ -418,6 +475,7 @@ async function createExportId(blob: Blob): Promise<string> {
 
 export default function ModiDrain() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const portraitRef = useRef<HTMLDivElement>(null);
 	const assetsRef = useRef<RenderAssets | null>(null);
 	const animationFrameRef = useRef<number | null>(null);
 	const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -545,15 +603,19 @@ export default function ModiDrain() {
 		const startLevel = assets.height * INITIAL_FILL_TOP;
 		const targetLevel = assets.height * (completedPercentage / 100);
 
+		const portrait = portraitRef.current;
+		if (portrait) {
+			const bounds = portrait.getBoundingClientRect();
+			if (bounds.top < 0 || bounds.bottom > window.innerHeight) {
+				// On iOS, animation frames can pause during manual scrolling and
+				// resume with a large timestamp jump. Move the result into view
+				// synchronously so playback starts from its first visible frame.
+				portrait.scrollIntoView({ behavior: "auto", block: "start" });
+			}
+		}
+
 		paint(startLevel);
 		setPercentage(0);
-
-		if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-			paint(targetLevel);
-			setPercentage(completedPercentage);
-			setPhase("complete");
-			return;
-		}
 
 		const audio = new Audio(`/audio/${selectedAudio}`);
 		audioRef.current = audio;
@@ -634,6 +696,14 @@ export default function ModiDrain() {
 		let mediaRecorder: MediaRecorder | null = null;
 
 		try {
+			const AudioContextClass =
+				window.AudioContext ||
+				(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+			audioCtx = new AudioContextClass();
+			if (audioCtx.state === "suspended") {
+				await audioCtx.resume();
+			}
+
 			if (typeof document !== "undefined" && document.fonts) {
 				await document.fonts.ready;
 			}
@@ -648,11 +718,6 @@ export default function ModiDrain() {
 				throw new Error(`Failed to load audio file: ${selectedAudio}`);
 			}
 			const audioArrayBuffer = await audioResponse.arrayBuffer();
-
-			const AudioContextClass =
-				window.AudioContext ||
-				(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-			audioCtx = new AudioContextClass();
 
 			const audioBuffer = await audioCtx.decodeAudioData(audioArrayBuffer);
 			const durationSec =
@@ -729,8 +794,8 @@ export default function ModiDrain() {
 
 			setExportState("recording");
 
-			sourceNode.start(0);
 			mediaRecorder.start();
+			sourceNode.start(0);
 
 			await new Promise<void>((resolve) => {
 				let recordStartTime: number | null = null;
@@ -765,17 +830,8 @@ export default function ModiDrain() {
 
 			const rawBlob = await recordingPromise;
 
-			let finalMp4Blob: Blob;
-			const isAlreadyH264Mp4 =
-				rawBlob.type.includes("mp4") &&
-				(rawBlob.type.includes("avc1") || rawBlob.type.includes("h264"));
-
-			if (isAlreadyH264Mp4) {
-				finalMp4Blob = rawBlob;
-			} else {
-				setExportState("converting");
-				finalMp4Blob = await convertWebmToMp4(rawBlob);
-			}
+			setExportState("converting");
+			const finalMp4Blob = await normalizeRecordingToMp4(rawBlob);
 
 			setExportState("downloading");
 
@@ -1001,7 +1057,11 @@ export default function ModiDrain() {
 	return (
 		<main className={styles.page}>
 			<section className={styles.experience}>
-				<div className={styles.portrait} aria-busy={phase === "loading" || exportState !== "idle"}>
+				<div
+					ref={portraitRef}
+					className={styles.portrait}
+					aria-busy={phase === "loading" || exportState !== "idle"}
+				>
 					<div className={styles.header}>
 						<h1 className={styles.titleMain}>PM Modi’s Term is</h1>
 						<h2 className={styles.titleSub}>

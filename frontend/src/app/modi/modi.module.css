@@ -1,5 +1,5 @@
 .page {
-	--yellow: #F3B23E;
+	--yellow: #f4b940;
 	min-height: 100svh;
 	overflow: hidden;
 	background: #2d323b;
@@ -182,7 +182,7 @@
 .dateInput:focus,
 .selectInput:focus {
 	border-color: var(--yellow);
-	box-shadow: 0 0 0 2px rgba(243, 178, 62, 0.25);
+	box-shadow: 0 0 0 2px rgba(244, 185, 64, 0.25);
 }
 
 .dateInput:disabled,
@@ -228,7 +228,7 @@
 	border: 1px solid var(--yellow);
 	background: var(--yellow);
 	color: #050505;
-	box-shadow: 0 4px 14px rgba(243, 178, 62, 0.25);
+	box-shadow: 0 4px 14px rgba(244, 185, 64, 0.25);
 }
 
 .button:hover:not(:disabled) {
@@ -236,7 +236,7 @@
 	color: #050505;
 	border-color: #e5a42e;
 	transform: translateY(-1px);
-	box-shadow: 0 6px 16px rgba(243, 178, 62, 0.35);
+	box-shadow: 0 6px 16px rgba(244, 185, 64, 0.35);
 }
 
 .buttonSecondary {
@@ -246,7 +246,7 @@
 }
 
 .buttonSecondary:hover:not(:disabled) {
-	background: rgba(243, 178, 62, 0.12);
+	background: rgba(244, 185, 64, 0.12);
 	color: var(--yellow);
 	transform: translateY(-1px);
 }
@@ -319,7 +319,7 @@
 
 .captionInput:focus {
 	border-color: var(--yellow);
-	box-shadow: 0 0 0 2px rgba(243, 178, 62, 0.25);
+	box-shadow: 0 0 0 2px rgba(244, 185, 64, 0.25);
 }
 
 .captionInput:disabled {
@@ -340,7 +340,7 @@
 
 .buttonSaveLocal {
 	border: 1.5px solid var(--yellow);
-	background: rgba(243, 178, 62, 0.12);
+	background: rgba(244, 185, 64, 0.12);
 	color: var(--yellow);
 }
 
@@ -348,7 +348,7 @@
 	background: var(--yellow);
 	color: #050505;
 	transform: translateY(-1px);
-	box-shadow: 0 6px 16px rgba(243, 178, 62, 0.3);
+	box-shadow: 0 6px 16px rgba(244, 185, 64, 0.3);
 }
 
 .instagramSection {
