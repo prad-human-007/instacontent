@@ -26,7 +26,47 @@ type GeneratedVideo = {
 	exportId: string;
 	filename: string;
 	size: number;
+	duration?: number;
 };
+
+function getVideoDuration(blob: Blob): Promise<number> {
+	return new Promise((resolve) => {
+		if (typeof window === "undefined" || !URL || !URL.createObjectURL) {
+			resolve(0);
+			return;
+		}
+		const video = document.createElement("video");
+		video.preload = "metadata";
+		const url = URL.createObjectURL(blob);
+
+		const timer = setTimeout(() => {
+			URL.revokeObjectURL(url);
+			resolve(0);
+		}, 3000);
+
+		video.onloadedmetadata = () => {
+			clearTimeout(timer);
+			URL.revokeObjectURL(url);
+			if (video.duration && !isNaN(video.duration) && isFinite(video.duration)) {
+				resolve(video.duration);
+			} else {
+				resolve(0);
+			}
+		};
+		video.onerror = () => {
+			clearTimeout(timer);
+			URL.revokeObjectURL(url);
+			resolve(0);
+		};
+		video.src = url;
+	});
+}
+
+function formatVideoDuration(seconds: number): string {
+	if (!seconds || isNaN(seconds) || seconds <= 0) return "";
+	const formatted = seconds % 1 === 0 ? seconds.toFixed(0) : seconds.toFixed(1);
+	return `${formatted}s`;
+}
 
 type RenderAssets = {
 	fillMask: HTMLCanvasElement;
@@ -840,10 +880,14 @@ export default function ModiDrain() {
 			const exportId = await createExportId(finalMp4Blob);
 
 			generatedVideoBlobRef.current = finalMp4Blob;
+			const measuredDuration = await getVideoDuration(finalMp4Blob);
+			const videoDuration = measuredDuration > 0 ? measuredDuration : (durationMs + EXTRA_HOLD_MS) / 1000;
+
 			setGeneratedVideo({
 				exportId,
 				filename: downloadFilename,
 				size: finalMp4Blob.size,
+				duration: videoDuration,
 			});
 			if (!isCaptionUserEdited.current || !caption.trim()) {
 				setCaption(generateDefaultCaption(startDate, currentDate, endDate));
@@ -1182,6 +1226,9 @@ export default function ModiDrain() {
 									<span className={styles.statusDot} aria-hidden="true" />
 									Video ready
 									<span className={styles.videoSize}>
+										{generatedVideo.duration
+											? `${formatVideoDuration(generatedVideo.duration)} • `
+											: ""}
 										{(generatedVideo.size / (1024 * 1024)).toFixed(1)} MB
 									</span>
 								</div>
