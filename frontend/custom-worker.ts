@@ -118,7 +118,7 @@ async function runBrowserJob(env: CloudflareEnv, job: AutomationJob): Promise<vo
 				),
 			{ polling: 500, timeout: 9 * 60_000 },
 		);
-		const result = await page.evaluate(
+		const result: BrowserResult = await page.evaluate(
 			() =>
 				(window as typeof window & { __modiAutomationResult?: BrowserResult })
 					.__modiAutomationResult ?? {},

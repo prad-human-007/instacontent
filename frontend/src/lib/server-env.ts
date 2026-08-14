@@ -123,7 +123,7 @@ class TokenRefreshError extends Error {
 	}
 }
 
-function decodeBase64Key(value: string): Uint8Array {
+function decodeBase64Key(value: string): Uint8Array<ArrayBuffer> {
 	try {
 		const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
 		const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
