@@ -141,6 +141,112 @@
 	backdrop-filter: blur(8px);
 }
 
+.automationPanel {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	background: rgba(0, 0, 0, 0.35);
+	border: 1px solid rgba(244, 185, 64, 0.35);
+	border-radius: 14px;
+	padding: 1rem;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.automationHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.automationTitle {
+	margin-top: 0.15rem;
+	font-size: 0.95rem;
+	font-weight: 800;
+	color: #ffffff;
+}
+
+.toggle {
+	position: relative;
+	display: inline-flex;
+	width: 2.8rem;
+	height: 1.55rem;
+	cursor: pointer;
+}
+
+.toggle input {
+	position: absolute;
+	opacity: 0;
+}
+
+.toggle span {
+	width: 100%;
+	height: 100%;
+	border-radius: 999px;
+	background: #3f4652;
+	transition: background-color 160ms ease;
+}
+
+.toggle span::after {
+	content: "";
+	position: absolute;
+	top: 0.2rem;
+	left: 0.2rem;
+	width: 1.15rem;
+	height: 1.15rem;
+	border-radius: 50%;
+	background: #ffffff;
+	transition: transform 160ms ease;
+}
+
+.toggle input:checked + span {
+	background: var(--yellow);
+}
+
+.toggle input:checked + span::after {
+	transform: translateX(1.25rem);
+}
+
+.toggle input:focus-visible + span {
+	outline: 3px solid var(--yellow);
+	outline-offset: 3px;
+}
+
+.automationGrid {
+	display: grid;
+	grid-template-columns: 0.8fr 1.2fr;
+	gap: 0.65rem;
+}
+
+.automationStatus {
+	display: flex;
+	flex-direction: column;
+	gap: 0.2rem;
+	padding: 0.65rem 0.75rem;
+	border-radius: 8px;
+	background: #14171c;
+	color: #cbd5e1;
+	font-size: 0.74rem;
+	line-height: 1.35;
+}
+
+.automationError {
+	color: #fca5a5;
+}
+
+.automationActions {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.automationMessage {
+	color: #fde68a;
+	font-size: 0.74rem;
+	line-height: 1.35;
+	text-align: center;
+}
+
 .inputField {
 	display: flex;
 	flex-direction: column;
@@ -481,5 +587,4 @@
 		transition: none;
 	}
 }
-
 

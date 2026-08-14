@@ -7,11 +7,12 @@ const FRAME_SRC = "/modi/modi-frame.png";
 const INITIAL_FILL_TOP = 0;
 const DRAIN_DURATION_MS = 6000;
 const EXTRA_HOLD_MS = 2000;
+const MAX_GENERATED_VIDEO_BYTES = 64 * 1024 * 1024;
 const LINE_ALPHA_THRESHOLD = 24;
 const FILL_COLOUR = [244, 185, 64] as const;
 
 type Phase = "loading" | "ready" | "running" | "complete" | "error";
-type ExportState = "idle" | "preparing" | "recording" | "converting" | "downloading";
+type ExportState = "idle" | "preparing" | "encoding" | "downloading";
 type PublishingState =
 	| "idle"
 	| "video_ready"
@@ -29,37 +30,67 @@ type GeneratedVideo = {
 	duration?: number;
 };
 
-function getVideoDuration(blob: Blob): Promise<number> {
-	return new Promise((resolve) => {
-		if (typeof window === "undefined" || !URL || !URL.createObjectURL) {
-			resolve(0);
-			return;
-		}
-		const video = document.createElement("video");
-		video.preload = "metadata";
-		const url = URL.createObjectURL(blob);
+type WebCodecsCapability = {
+	checkedAt: string;
+	supported: boolean;
+	video: boolean;
+	audio: boolean;
+	message: string;
+};
 
-		const timer = setTimeout(() => {
-			URL.revokeObjectURL(url);
-			resolve(0);
-		}, 3000);
+type AutomationJobPayload = {
+	job: {
+		kind: "probe" | "publish";
+		localDate: string;
+		runId: string;
+		settings: {
+			audioFile: string;
+			endDate: string;
+			startDate: string;
+		};
+	};
+};
 
-		video.onloadedmetadata = () => {
-			clearTimeout(timer);
-			URL.revokeObjectURL(url);
-			if (video.duration && !isNaN(video.duration) && isFinite(video.duration)) {
-				resolve(video.duration);
-			} else {
-				resolve(0);
-			}
-		};
-		video.onerror = () => {
-			clearTimeout(timer);
-			URL.revokeObjectURL(url);
-			resolve(0);
-		};
-		video.src = url;
-	});
+type AutomationBrowserResult = {
+	terminal: true;
+	state: "probe_complete" | "published" | "failed" | "outcome_unknown";
+	capability?: WebCodecsCapability;
+	mediaId?: string;
+	errorCode?: string;
+	errorMessage?: string;
+	retrySafe?: boolean;
+};
+
+type AutomationStatusResponse = {
+	settings: {
+		enabled: boolean;
+		time: string;
+		timeZone: string;
+		startDate: string;
+		endDate: string;
+		audioFile: string;
+		updatedAt: string;
+	};
+	capability: WebCodecsCapability | null;
+	activeRun: {
+		runId: string;
+		state: string;
+		errorMessage?: string;
+	} | null;
+	lastRun: {
+		state: string;
+		createdAt?: string;
+		finishedAt?: string;
+		mediaId?: string;
+		errorMessage?: string;
+	} | null;
+	nextRunAt: string | null;
+};
+
+declare global {
+	interface Window {
+		__modiAutomationResult?: AutomationBrowserResult;
+	}
 }
 
 function formatVideoDuration(seconds: number): string {
@@ -381,107 +412,296 @@ async function isMp4Container(blob: Blob): Promise<boolean> {
 	);
 }
 
-async function normalizeRecordingToMp4(recordedBlob: Blob): Promise<Blob> {
-	const { FFmpeg } = await import("@ffmpeg/ffmpeg");
-	const { fetchFile, toBlobURL } = await import("@ffmpeg/util");
-
-	const ffmpeg = new FFmpeg();
-	const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-
-	await ffmpeg.load({
-		coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-		wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-	});
-
-	const inputIsMp4 = await isMp4Container(recordedBlob);
-	const inputName = inputIsMp4 ? "input.mp4" : "input.webm";
-	const outputName = "output.mp4";
-	const recordedMimeType = recordedBlob.type.toLowerCase();
-	const canCopyInstagramCodecs =
-		inputIsMp4 &&
-		/(?:avc1|h264)/.test(recordedMimeType) &&
-		/(?:mp4a|aac)/.test(recordedMimeType);
-
-	await ffmpeg.writeFile(inputName, await fetchFile(recordedBlob));
-
-	if (canCopyInstagramCodecs) {
-		// Safari/iOS MediaRecorder can return fragmented MP4. Flatten it into
-		// a regular fast-start MP4 while preserving its H.264/AAC streams.
-		await ffmpeg.exec([
-			"-fflags",
-			"+genpts",
-			"-i",
-			inputName,
-			"-map",
-			"0:v:0",
-			"-map",
-			"0:a:0?",
-			"-c",
-			"copy",
-			"-avoid_negative_ts",
-			"make_zero",
-			"-map_metadata",
-			"-1",
-			"-movflags",
-			"+faststart",
-			outputName,
-		]);
-	} else {
-		await ffmpeg.exec([
-			"-fflags",
-			"+genpts",
-			"-i",
-			inputName,
-			"-map",
-			"0:v:0",
-			"-map",
-			"0:a:0?",
-			"-c:v",
-			"libx264",
-			"-preset",
-			"veryfast",
-			"-crf",
-			"23",
-			"-c:a",
-			"aac",
-			"-b:a",
-			"128k",
-			"-pix_fmt",
-			"yuv420p",
-			"-r",
-			"30",
-			"-avoid_negative_ts",
-			"make_zero",
-			"-map_metadata",
-			"-1",
-			"-movflags",
-			"+faststart",
-			outputName,
-		]);
-	}
-
-	const data = await ffmpeg.readFile(outputName);
-	const mp4Blob = new Blob([data as unknown as BlobPart], { type: "video/mp4" });
-
+async function probeWebCodecs(): Promise<WebCodecsCapability> {
 	try {
-		await ffmpeg.deleteFile(inputName);
-		await ffmpeg.deleteFile(outputName);
-		ffmpeg.terminate();
+		const { canEncodeAudio, canEncodeVideo } = await import("mediabunny");
+		const [video, audio] = await Promise.all([
+			canEncodeVideo("avc", {
+				width: 1080,
+				height: 1920,
+				bitrate: 6_000_000,
+				fullCodecString: "avc1.42c02a",
+			}),
+			canEncodeAudio("aac", {
+				numberOfChannels: 2,
+				sampleRate: 44_100,
+				bitrate: 128_000,
+			}),
+		]);
+		const supported = video && audio;
+		return {
+			checkedAt: new Date().toISOString(),
+			supported,
+			video,
+			audio,
+			message: supported
+				? "Cloudflare browser supports native H.264 and AAC WebCodecs encoding."
+				: `WebCodecs support missing: ${!video ? "H.264" : ""}${!video && !audio ? " and " : ""}${!audio ? "AAC" : ""}.`,
+		};
 	} catch {
-		// Ignore cleanup error
+		return {
+			checkedAt: new Date().toISOString(),
+			supported: false,
+			video: false,
+			audio: false,
+			message: "WebCodecs is unavailable in this browser.",
+		};
+	}
+}
+
+async function validateGeneratedMp4(
+	blob: Blob,
+	expectedAudioDuration: number,
+	expectedVideoDuration: number,
+): Promise<void> {
+	if (blob.size > MAX_GENERATED_VIDEO_BYTES) {
+		throw new Error("The generated MP4 is larger than Instagram’s 64 MB limit.");
+	}
+	if (!(await isMp4Container(blob))) {
+		throw new Error("WebCodecs produced an invalid MP4 file.");
 	}
 
-	return mp4Blob;
+	const { BlobSource, Input, MP4 } = await import("mediabunny");
+	const media = new Input({ formats: [MP4], source: new BlobSource(blob) });
+	try {
+		if (!(await media.canRead())) throw new Error("The generated MP4 could not be inspected.");
+		const [videoTracks, audioTracks] = await Promise.all([
+			media.getVideoTracks(),
+			media.getAudioTracks(),
+		]);
+		if (videoTracks.length !== 1 || audioTracks.length !== 1) {
+			throw new Error("The generated MP4 must contain one video track and one audio track.");
+		}
+		const videoTrack = videoTracks[0];
+		const audioTrack = audioTracks[0];
+		const [videoCodec, audioCodec, width, height, frameRate, videoDuration, audioDuration] =
+			await Promise.all([
+				videoTrack.getCodec(),
+				audioTrack.getCodec(),
+				videoTrack.getDisplayWidth(),
+				videoTrack.getDisplayHeight(),
+				videoTrack.computeFrameRateMetrics(),
+				media.computeDuration([videoTrack]),
+				media.computeDuration([audioTrack]),
+			]);
+		if (videoCodec !== "avc" || audioCodec !== "aac") {
+			throw new Error("The generated MP4 does not contain H.264 video and AAC audio.");
+		}
+		if (width !== 1080 || height !== 1920) {
+			throw new Error("The generated MP4 is not 1080×1920.");
+		}
+		if (!frameRate.frameRateIsConstant || Math.abs(frameRate.averageFrameRate - 30) > 0.05) {
+			throw new Error("The generated MP4 is not a constant 30 FPS video.");
+		}
+		if (Math.abs(videoDuration - expectedVideoDuration) > 0.1) {
+			throw new Error("The generated MP4 does not include the full final hold.");
+		}
+		if (Math.abs(audioDuration - expectedAudioDuration) > 0.25) {
+			throw new Error("The generated MP4 audio duration is invalid.");
+		}
+	} finally {
+		media.dispose();
+	}
+}
+
+async function renderVideoWithWebCodecs(input: {
+	assets: RenderAssets;
+	audioFile: string;
+	currentDate: string;
+	endDate: string;
+	onProgress?: (percentage: number) => void;
+	startDate: string;
+}): Promise<{ blob: Blob; duration: number }> {
+	const capability = await probeWebCodecs();
+	if (!capability.supported) throw new Error(capability.message);
+
+	const {
+		AudioBufferSource,
+		BufferTarget,
+		CanvasSource,
+		Mp4OutputFormat,
+		Output,
+	} = await import("mediabunny");
+	const audioContext = new AudioContext();
+	try {
+		const audioResponse = await fetch(`/audio/${encodeURIComponent(input.audioFile)}`);
+		if (!audioResponse.ok) throw new Error(`Failed to load audio file: ${input.audioFile}`);
+		const audioBuffer = await audioContext.decodeAudioData(await audioResponse.arrayBuffer());
+		const animationDuration = audioBuffer.duration > 0
+			? audioBuffer.duration
+			: DRAIN_DURATION_MS / 1000;
+		const totalDuration = animationDuration + EXTRA_HOLD_MS / 1000;
+		const frameRate = 30;
+		const frameDuration = 1 / frameRate;
+		const frameCount = Math.ceil(totalDuration * frameRate);
+
+		const exportCanvas = document.createElement("canvas");
+		exportCanvas.width = 1080;
+		exportCanvas.height = 1920;
+		const context = exportCanvas.getContext("2d");
+		if (!context) throw new Error("Could not create the export canvas.");
+		const portraitCanvas = document.createElement("canvas");
+		portraitCanvas.width = input.assets.width;
+		portraitCanvas.height = input.assets.height;
+
+		const target = new BufferTarget();
+		const output = new Output({
+			format: new Mp4OutputFormat({ fastStart: "in-memory" }),
+			target,
+		});
+		const videoSource = new CanvasSource(exportCanvas, {
+			codec: "avc",
+			bitrate: 6_000_000,
+			fullCodecString: "avc1.42c02a",
+			keyFrameInterval: 2,
+			latencyMode: "quality",
+		});
+		const audioSource = new AudioBufferSource({
+			codec: "aac",
+			bitrate: 128_000,
+		});
+		output.addVideoTrack(videoSource, { frameRate });
+		output.addAudioTrack(audioSource);
+		await output.start();
+		await audioSource.add(audioBuffer);
+
+		const completedPercentage = calculateTargetPercentage(
+			input.startDate,
+			input.currentDate,
+			input.endDate,
+		);
+		const startLevel = input.assets.height * INITIAL_FILL_TOP;
+		const targetLevel = input.assets.height * (completedPercentage / 100);
+
+		for (let frame = 0; frame < frameCount; frame += 1) {
+			const timestamp = frame * frameDuration;
+			const progress = Math.min(timestamp / animationDuration, 1);
+			const fillTop = startLevel + (targetLevel - startLevel) * progress;
+			const currentPercentage = completedPercentage * progress;
+			drawOffscreenCard(
+				context,
+				fillTop,
+				currentPercentage,
+				input.assets,
+				portraitCanvas,
+			);
+			await videoSource.add(timestamp, frameDuration, { keyFrame: frame % (frameRate * 2) === 0 });
+			if (frame % 10 === 0 || frame === frameCount - 1) {
+				input.onProgress?.(currentPercentage);
+			}
+		}
+		await output.finalize();
+		if (!target.buffer) throw new Error("WebCodecs did not produce an MP4 file.");
+		const outputMimeType = await output.getMimeType();
+		if (!/avc1/i.test(outputMimeType) || !/mp4a\.40\.2/i.test(outputMimeType)) {
+			throw new Error("WebCodecs did not produce an H.264/AAC MP4 file.");
+		}
+		const blob = new Blob([target.buffer], { type: "video/mp4" });
+		await validateGeneratedMp4(
+			blob,
+			animationDuration,
+			frameCount * frameDuration,
+		);
+		return { blob, duration: totalDuration };
+	} finally {
+		if (audioContext.state !== "closed") await audioContext.close().catch(() => {});
+	}
+}
+
+class PublishingRequestError extends Error {
+	constructor(
+		message: string,
+		readonly code = "INSTAGRAM_PUBLISH_FAILED",
+		readonly retrySafe = false,
+	) {
+		super(message);
+	}
+}
+
+async function publishVideo(input: {
+	blob: Blob;
+	caption: string;
+	exportId: string;
+	filename: string;
+	onStage?: (stage: PublishingState) => void | Promise<void>;
+}): Promise<string> {
+	const formData = new FormData();
+	formData.append("video", input.blob, input.filename);
+	formData.append("caption", input.caption.trim());
+	formData.append("exportId", input.exportId);
+	await input.onStage?.("uploading_video");
+	const response = await fetch("/api/instagram/publish", { method: "POST", body: formData });
+	const contentType = response.headers.get("content-type") ?? "";
+	if (!response.ok && contentType.includes("application/json")) {
+		const body = (await response.json().catch(() => null)) as {
+			error?: { code?: unknown; message?: unknown };
+		} | null;
+		throw new PublishingRequestError(
+			typeof body?.error?.message === "string"
+				? body.error.message
+				: "Instagram publishing request failed.",
+			typeof body?.error?.code === "string" ? body.error.code : undefined,
+		);
+	}
+	if (!response.body || !contentType.includes("application/x-ndjson")) {
+		throw new PublishingRequestError("Instagram publishing is unavailable.");
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let mediaId: string | null = null;
+	const handleLine = async (line: string) => {
+		if (!line.trim()) return;
+		const event = JSON.parse(line) as {
+			type?: unknown;
+			stage?: unknown;
+			mediaId?: unknown;
+			code?: unknown;
+			message?: unknown;
+			retrySafe?: unknown;
+		};
+		if (
+			event.type === "stage" &&
+			(event.stage === "preparing_reel" ||
+				event.stage === "instagram_processing" ||
+				event.stage === "publishing")
+		) {
+			await input.onStage?.(event.stage);
+			return;
+		}
+		if (event.type === "published" && typeof event.mediaId === "string") {
+			mediaId = event.mediaId;
+			return;
+		}
+		if (event.type === "error") {
+			throw new PublishingRequestError(
+				typeof event.message === "string" ? event.message : "Instagram publishing failed.",
+				typeof event.code === "string" ? event.code : undefined,
+				event.retrySafe === true,
+			);
+		}
+	};
+
+	while (true) {
+		const { done, value } = await reader.read();
+		buffer += decoder.decode(value, { stream: !done });
+		const lines = buffer.split("\n");
+		buffer = lines.pop() ?? "";
+		for (const line of lines) await handleLine(line);
+		if (done) break;
+	}
+	if (buffer.trim()) await handleLine(buffer);
+	if (!mediaId) throw new PublishingRequestError("Instagram publishing ended without confirmation.");
+	return mediaId;
 }
 
 function getExportLabel(state: ExportState): string {
 	switch (state) {
 		case "preparing":
 			return "Preparing…";
-		case "recording":
-			return "Recording…";
-		case "converting":
-			return "Converting…";
+		case "encoding":
+			return "Encoding…";
 		case "downloading":
 			return "Finalizing…";
 		default:
@@ -521,6 +741,7 @@ export default function ModiDrain() {
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const generatedVideoBlobRef = useRef<Blob | null>(null);
 	const isCaptionUserEdited = useRef<boolean>(false);
+	const automationStartedRef = useRef(false);
 
 	const [phase, setPhase] = useState<Phase>("loading");
 	const [percentage, setPercentage] = useState<number>(0);
@@ -540,6 +761,12 @@ export default function ModiDrain() {
 	const [publishingState, setPublishingState] = useState<PublishingState>("idle");
 	const [publishingMessage, setPublishingMessage] = useState<string | null>(null);
 	const [publishedMediaId, setPublishedMediaId] = useState<string | null>(null);
+	const [automationStatus, setAutomationStatus] = useState<AutomationStatusResponse | null>(null);
+	const [automationEnabled, setAutomationEnabled] = useState(false);
+	const [automationTime, setAutomationTime] = useState("12:00");
+	const [automationTimeZone, setAutomationTimeZone] = useState("Asia/Kolkata");
+	const [automationBusy, setAutomationBusy] = useState(false);
+	const [automationMessage, setAutomationMessage] = useState<string | null>(null);
 
 	useEffect(() => {
 		fetch("/api/audio")
@@ -557,12 +784,10 @@ export default function ModiDrain() {
 
 	useEffect(() => {
 		const savedStart = localStorage.getItem(LOCAL_STORAGE_KEY_START);
-		const savedCurrent = localStorage.getItem(LOCAL_STORAGE_KEY_CURRENT);
 		const savedEnd = localStorage.getItem(LOCAL_STORAGE_KEY_END);
 
 		if (savedStart) setStartDate(savedStart);
-		if (savedCurrent) setCurrentDate(savedCurrent);
-		else setCurrentDate(getTodayString());
+		setCurrentDate(getTodayString());
 		if (savedEnd) setEndDate(savedEnd);
 
 		setIsLoaded(true);
@@ -574,6 +799,107 @@ export default function ModiDrain() {
 		localStorage.setItem(LOCAL_STORAGE_KEY_CURRENT, currentDate);
 		localStorage.setItem(LOCAL_STORAGE_KEY_END, endDate);
 	}, [startDate, currentDate, endDate, isLoaded]);
+
+	const loadAutomationStatus = useCallback(async () => {
+		if (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("automationRunId")) {
+			return;
+		}
+		const response = await fetch("/api/instagram/automation", { cache: "no-store" });
+		if (!response.ok) return;
+		const data = await response.json() as AutomationStatusResponse;
+		setAutomationStatus(data);
+		setAutomationEnabled(data.settings.enabled);
+		setAutomationTime(data.settings.time);
+		const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+		setAutomationTimeZone(
+			data.settings.updatedAt === new Date(0).toISOString() && browserTimeZone
+				? browserTimeZone
+				: data.settings.timeZone,
+		);
+	}, []);
+
+	useEffect(() => {
+		void loadAutomationStatus();
+	}, [loadAutomationStatus]);
+
+	useEffect(() => {
+		if (!automationStatus?.activeRun) return;
+		const timer = window.setInterval(() => void loadAutomationStatus(), 3_000);
+		return () => window.clearInterval(timer);
+	}, [automationStatus?.activeRun, loadAutomationStatus]);
+
+	const saveAutomationSettings = async () => {
+		setAutomationBusy(true);
+		setAutomationMessage(null);
+		try {
+			const response = await fetch("/api/instagram/automation", {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					enabled: automationEnabled,
+					time: automationTime,
+					timeZone: automationTimeZone,
+					startDate,
+					endDate,
+					audioFile: selectedAudio,
+				}),
+			});
+			const body = await response.json().catch(() => null) as {
+				error?: { message?: unknown };
+			} | null;
+			if (!response.ok) {
+				throw new Error(
+					typeof body?.error?.message === "string"
+						? body.error.message
+						: "Automation settings could not be saved.",
+				);
+			}
+			setAutomationMessage("Automation settings saved.");
+			await loadAutomationStatus();
+		} catch (error) {
+			setAutomationMessage(error instanceof Error ? error.message : "Automation settings failed.");
+		} finally {
+			setAutomationBusy(false);
+		}
+	};
+
+	const queueAutomationAction = async (action: "probe" | "publish") => {
+		if (
+			action === "publish" &&
+			!window.confirm("Generate and publish a real Instagram Reel now? Today’s scheduled post will then be skipped.")
+		) {
+			return;
+		}
+		setAutomationBusy(true);
+		setAutomationMessage(null);
+		try {
+			const response = await fetch("/api/instagram/automation/run", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ action }),
+			});
+			const body = await response.json().catch(() => null) as {
+				error?: { message?: unknown };
+			} | null;
+			if (!response.ok) {
+				throw new Error(
+					typeof body?.error?.message === "string"
+						? body.error.message
+						: "Automation job could not be queued.",
+				);
+			}
+			setAutomationMessage(
+				action === "probe"
+					? "Cloudflare WebCodecs check queued. It will start within one minute."
+					: "Real Reel queued. It will start within one minute.",
+			);
+			await loadAutomationStatus();
+		} catch (error) {
+			setAutomationMessage(error instanceof Error ? error.message : "Automation action failed.");
+		} finally {
+			setAutomationBusy(false);
+		}
+	};
 
 	const stopAudio = useCallback(() => {
 		if (audioRef.current) {
@@ -731,163 +1057,33 @@ export default function ModiDrain() {
 			animationFrameRef.current = null;
 		}
 
-		let audioCtx: AudioContext | null = null;
-		let combinedStream: MediaStream | null = null;
-		let mediaRecorder: MediaRecorder | null = null;
-
 		try {
-			const AudioContextClass =
-				window.AudioContext ||
-				(window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-			audioCtx = new AudioContextClass();
-			if (audioCtx.state === "suspended") {
-				await audioCtx.resume();
-			}
-
 			if (typeof document !== "undefined" && document.fonts) {
 				await document.fonts.ready;
 			}
-
 			const assets = assetsRef.current;
-			if (!assets) {
-				throw new Error("Portrait assets are not loaded yet.");
-			}
-
-			const audioResponse = await fetch(`/audio/${selectedAudio}`);
-			if (!audioResponse.ok) {
-				throw new Error(`Failed to load audio file: ${selectedAudio}`);
-			}
-			const audioArrayBuffer = await audioResponse.arrayBuffer();
-
-			const audioBuffer = await audioCtx.decodeAudioData(audioArrayBuffer);
-			const durationSec =
-				audioBuffer.duration && audioBuffer.duration > 0
-					? audioBuffer.duration
-					: DRAIN_DURATION_MS / 1000;
-			const durationMs = durationSec * 1000;
-
-			const sourceNode = audioCtx.createBufferSource();
-			sourceNode.buffer = audioBuffer;
-			const destNode = audioCtx.createMediaStreamDestination();
-			sourceNode.connect(destNode);
-
-			const exportCanvas = document.createElement("canvas");
-			exportCanvas.width = 1080;
-			exportCanvas.height = 1920;
-			const ctx = exportCanvas.getContext("2d");
-			if (!ctx) throw new Error("Could not get offscreen canvas 2d context.");
-
-			const portraitCanvas = document.createElement("canvas");
-			portraitCanvas.width = assets.width;
-			portraitCanvas.height = assets.height;
-
-			const canvasStream = exportCanvas.captureStream(30);
-			combinedStream = new MediaStream([
-				...canvasStream.getVideoTracks(),
-				...destNode.stream.getAudioTracks(),
-			]);
-
-			const completedPercentage = calculateTargetPercentage(startDate, currentDate, endDate);
-			const startLevel = assets.height * INITIAL_FILL_TOP;
-			const targetLevel = assets.height * (completedPercentage / 100);
-
-			let mimeType = "";
-			const preferredTypes = [
-				"video/mp4;codecs=avc1.42E01E,mp4a.40.2",
-				"video/mp4;codecs=avc1,mp4a.40.2",
-				"video/mp4",
-				"video/webm;codecs=vp9,opus",
-				"video/webm;codecs=vp8,opus",
-				"video/webm",
-			];
-			for (const t of preferredTypes) {
-				if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) {
-					mimeType = t;
-					break;
-				}
-			}
-
-			mediaRecorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : undefined);
-			const chunks: Blob[] = [];
-			mediaRecorder.ondataavailable = (e) => {
-				if (e.data && e.data.size > 0) {
-					chunks.push(e.data);
-				}
-			};
-
-			const recordingPromise = new Promise<Blob>((resolve, reject) => {
-				if (!mediaRecorder) return reject(new Error("MediaRecorder not initialized"));
-				mediaRecorder.onstop = () => {
-					const recordedBlob = new Blob(chunks, {
-						type: mediaRecorder?.mimeType || mimeType || "video/webm",
-					});
-					resolve(recordedBlob);
-				};
-				mediaRecorder.onerror = (e) => {
-					reject(new Error("MediaRecorder error: " + (e as unknown as Error).message));
-				};
-			});
-
-			drawOffscreenCard(ctx, startLevel, 0, assets, portraitCanvas);
-			paint(startLevel);
+			if (!assets) throw new Error("Portrait assets are not loaded yet.");
+			paint(assets.height * INITIAL_FILL_TOP);
 			setPercentage(0);
-
-			setExportState("recording");
-
-			mediaRecorder.start();
-			sourceNode.start(0);
-
-			await new Promise<void>((resolve) => {
-				let recordStartTime: number | null = null;
-				const animate = (now: number) => {
-					if (recordStartTime === null) {
-						recordStartTime = now;
-					}
-					const elapsedMs = now - recordStartTime;
-					const progress = Math.min(elapsedMs / durationMs, 1);
-					const fillTop = startLevel + (targetLevel - startLevel) * progress;
-					const currentPct = progress * completedPercentage;
-
-					drawOffscreenCard(ctx, fillTop, currentPct, assets, portraitCanvas);
-					paint(fillTop);
-					setPercentage(currentPct);
-
-					if (elapsedMs < durationMs + EXTRA_HOLD_MS) {
-						requestAnimationFrame(animate);
-					} else {
-						drawOffscreenCard(ctx, targetLevel, completedPercentage, assets, portraitCanvas);
-						paint(targetLevel);
-						setPercentage(completedPercentage);
-						setTimeout(resolve, 100);
-					}
-				};
-				requestAnimationFrame(animate);
+			setExportState("encoding");
+			const rendered = await renderVideoWithWebCodecs({
+				assets,
+				audioFile: selectedAudio,
+				currentDate,
+				endDate,
+				onProgress: setPercentage,
+				startDate,
 			});
-
-			if (mediaRecorder.state === "recording") {
-				mediaRecorder.stop();
-			}
-
-			const rawBlob = await recordingPromise;
-
-			setExportState("converting");
-			const finalMp4Blob = await normalizeRecordingToMp4(rawBlob);
-
 			setExportState("downloading");
-
 			const sanitizedDate = (currentDate || getTodayString()).trim().replace(/[^a-zA-Z0-9-]/g, "-");
 			const downloadFilename = `modi-term-progress-${sanitizedDate}.mp4`;
-			const exportId = await createExportId(finalMp4Blob);
-
-			generatedVideoBlobRef.current = finalMp4Blob;
-			const measuredDuration = await getVideoDuration(finalMp4Blob);
-			const videoDuration = measuredDuration > 0 ? measuredDuration : (durationMs + EXTRA_HOLD_MS) / 1000;
-
+			const exportId = await createExportId(rendered.blob);
+			generatedVideoBlobRef.current = rendered.blob;
 			setGeneratedVideo({
 				exportId,
 				filename: downloadFilename,
-				size: finalMp4Blob.size,
-				duration: videoDuration,
+				size: rendered.blob.size,
+				duration: rendered.duration,
 			});
 			if (!isCaptionUserEdited.current || !caption.trim()) {
 				setCaption(generateDefaultCaption(startDate, currentDate, endDate));
@@ -897,14 +1093,6 @@ export default function ModiDrain() {
 			console.error("Export error:", err);
 			setExportError((err as Error).message || "Export failed. Please try again.");
 		} finally {
-			if (combinedStream) {
-				combinedStream.getTracks().forEach((track) => track.stop());
-			}
-			if (audioCtx && audioCtx.state !== "closed") {
-				try {
-					await audioCtx.close();
-				} catch {}
-			}
 			resetPortrait();
 			setExportState("idle");
 		}
@@ -943,88 +1131,16 @@ export default function ModiDrain() {
 		setPublishingState("uploading_video");
 
 		try {
-			const formData = new FormData();
-			formData.append("video", videoBlob, generatedVideo.filename);
-			formData.append("caption", caption.trim());
-			formData.append("exportId", generatedVideo.exportId);
-
-			const response = await fetch("/api/instagram/publish", {
-				method: "POST",
-				body: formData,
+			const mediaId = await publishVideo({
+				blob: videoBlob,
+				caption,
+				exportId: generatedVideo.exportId,
+				filename: generatedVideo.filename,
+				onStage: setPublishingState,
 			});
-
-			const responseContentType = response.headers.get("content-type") ?? "";
-			if (!response.ok && responseContentType.includes("application/json")) {
-				const body = (await response.json().catch(() => null)) as {
-					error?: { message?: unknown };
-				} | null;
-				throw new Error(
-					typeof body?.error?.message === "string"
-						? body.error.message
-						: "Instagram publishing request failed.",
-				);
-			}
-
-			if (!response.body) {
-				throw new Error("Instagram publishing request failed.");
-			}
-			if (!responseContentType.includes("application/x-ndjson")) {
-				throw new Error(
-					"Instagram publishing is unavailable. Sign in through Cloudflare Access and try again.",
-				);
-			}
-
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-			let published = false;
-
-			const handleLine = (line: string) => {
-				if (!line.trim()) return;
-				const event = JSON.parse(line) as {
-					type?: unknown;
-					stage?: unknown;
-					mediaId?: unknown;
-					message?: unknown;
-				};
-
-				if (
-					event.type === "stage" &&
-					(event.stage === "preparing_reel" ||
-						event.stage === "instagram_processing" ||
-						event.stage === "publishing")
-				) {
-					setPublishingState(event.stage);
-					return;
-				}
-				if (event.type === "published" && typeof event.mediaId === "string") {
-					published = true;
-					setPublishedMediaId(event.mediaId);
-					setPublishingMessage("Reel published to @pmmodiprogressbar.");
-					setPublishingState("published");
-					return;
-				}
-				if (event.type === "error") {
-					throw new Error(
-						typeof event.message === "string"
-							? event.message
-							: "Instagram publishing failed.",
-					);
-				}
-			};
-
-			while (true) {
-				const { done, value } = await reader.read();
-				buffer += decoder.decode(value, { stream: !done });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() ?? "";
-				for (const line of lines) handleLine(line);
-				if (done) break;
-			}
-			if (buffer.trim()) handleLine(buffer);
-			if (!published) {
-				throw new Error("Instagram publishing ended without confirmation.");
-			}
+			setPublishedMediaId(mediaId);
+			setPublishingMessage("Reel published to @pmmodiprogressbar.");
+			setPublishingState("published");
 		} catch (error) {
 			setPublishingState("failed");
 			setPublishingMessage(
@@ -1090,6 +1206,119 @@ export default function ModiDrain() {
 			}
 		};
 	}, [paint, stopAudio]);
+
+	useEffect(() => {
+		if (phase !== "ready" || !isLoaded || automationStartedRef.current) return;
+		const runId = new URLSearchParams(window.location.search).get("automationRunId");
+		if (!runId) return;
+		automationStartedRef.current = true;
+
+		const reportState = async (
+			state: string,
+			extra?: Record<string, string | boolean>,
+		) => {
+			const response = await fetch("/api/instagram/automation/job", {
+				method: "PATCH",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ state, ...extra }),
+			});
+			if (!response.ok) throw new Error("Automation status could not be updated.");
+		};
+
+		const run = async () => {
+			try {
+				const response = await fetch("/api/instagram/automation/job", { cache: "no-store" });
+				if (!response.ok) throw new Error("Automation job could not be loaded.");
+				const { job } = await response.json() as AutomationJobPayload;
+
+				if (job.kind === "probe") {
+					await reportState("probing");
+					const capability = await probeWebCodecs();
+					window.__modiAutomationResult = {
+						terminal: true,
+						state: "probe_complete",
+						capability,
+					};
+					return;
+				}
+
+				const assets = assetsRef.current;
+				if (!assets) throw new Error("Portrait assets are not loaded.");
+				setStartDate(job.settings.startDate);
+				setCurrentDate(job.localDate);
+				setEndDate(job.settings.endDate);
+				setSelectedAudio(job.settings.audioFile);
+				setExportState("encoding");
+				await reportState("rendering");
+				if (document.fonts) await document.fonts.ready;
+				const rendered = await renderVideoWithWebCodecs({
+					assets,
+					audioFile: job.settings.audioFile,
+					currentDate: job.localDate,
+					endDate: job.settings.endDate,
+					onProgress: setPercentage,
+					startDate: job.settings.startDate,
+				});
+				const filename = `modi-term-progress-${job.localDate}.mp4`;
+				const exportId = await createExportId(rendered.blob);
+				const automaticCaption = generateDefaultCaption(
+					job.settings.startDate,
+					job.localDate,
+					job.settings.endDate,
+				);
+				if (!automaticCaption.startsWith(formatDateLong(job.localDate))) {
+					throw new Error("The automatic caption date could not be verified.");
+				}
+				setCaption(automaticCaption);
+				setExportState("idle");
+				setPublishingState("uploading_video");
+				const mediaId = await publishVideo({
+					blob: rendered.blob,
+					caption: automaticCaption,
+					exportId,
+					filename,
+					onStage: async (state) => {
+						setPublishingState(state);
+						await reportState(state);
+					},
+				});
+				await reportState("published", { mediaId });
+				setPublishingState("published");
+				setPublishedMediaId(mediaId);
+				window.__modiAutomationResult = {
+					terminal: true,
+					state: "published",
+					mediaId,
+				};
+			} catch (error) {
+				const publishError = error instanceof PublishingRequestError ? error : null;
+				const retrySafe = publishError ? publishError.retrySafe : true;
+				const outcomeUnknown =
+					publishError?.code === "META_PUBLISH_OUTCOME_UNKNOWN" ||
+					publishError?.code === "PUBLISH_CONFIRMATION_WRITE_FAILED";
+				const state = outcomeUnknown ? "outcome_unknown" : "failed";
+				const message = error instanceof Error ? error.message : "Automatic Reel publishing failed.";
+				try {
+					await reportState(state, {
+						errorCode: publishError?.code ?? "AUTOMATION_RENDER_FAILED",
+						errorMessage: message,
+						retrySafe,
+					});
+				} catch {}
+				setExportState("idle");
+				setPublishingState("failed");
+				window.__modiAutomationResult = {
+					terminal: true,
+					state,
+					errorCode: publishError?.code ?? "AUTOMATION_RENDER_FAILED",
+					errorMessage: message,
+					retrySafe,
+				};
+			}
+		};
+
+		void run();
+	}, [isLoaded, phase]);
 
 	const isPublishing =
 		publishingState === "uploading_video" ||
@@ -1187,6 +1416,120 @@ export default function ModiDrain() {
 								disabled={isDisabled}
 							/>
 						</div>
+					</div>
+
+					<div className={styles.automationPanel}>
+						<div className={styles.automationHeader}>
+							<div>
+								<span className={styles.label}>Automatic daily Reel</span>
+								<div className={styles.automationTitle}>
+									{automationEnabled ? "Enabled" : "Disabled"}
+								</div>
+							</div>
+							{automationStatus?.capability?.message && (
+								<div>{automationStatus.capability.message}</div>
+							)}
+							<label className={styles.toggle}>
+								<input
+									type="checkbox"
+									aria-label="Enable automatic daily Reel publishing"
+									checked={automationEnabled}
+									onChange={(event) => setAutomationEnabled(event.target.checked)}
+									disabled={automationBusy}
+								/>
+								<span aria-hidden="true" />
+							</label>
+						</div>
+
+						<div className={styles.automationGrid}>
+							<div className={styles.inputField}>
+								<label htmlFor="automationTime" className={styles.label}>Publish time</label>
+								<input
+									id="automationTime"
+									type="time"
+									className={styles.dateInput}
+									value={automationTime}
+									onChange={(event) => setAutomationTime(event.target.value)}
+									disabled={automationBusy}
+								/>
+							</div>
+							<div className={styles.inputField}>
+								<label htmlFor="automationTimeZone" className={styles.label}>Timezone</label>
+								<input
+									id="automationTimeZone"
+									className={styles.dateInput}
+									value={automationTimeZone}
+									onChange={(event) => setAutomationTimeZone(event.target.value)}
+									placeholder="Asia/Kolkata"
+									disabled={automationBusy}
+								/>
+							</div>
+						</div>
+
+						<div className={styles.automationStatus}>
+							<div>
+								WebCodecs: {automationStatus?.capability
+									? automationStatus.capability.supported ? "Ready" : "Unsupported"
+									: "Not checked"}
+							</div>
+							{automationStatus?.nextRunAt && (
+								<div>Next: {new Date(automationStatus.nextRunAt).toLocaleString()}</div>
+							)}
+							{automationStatus?.activeRun && (
+								<div>Current: {automationStatus.activeRun.state.replaceAll("_", " ")}</div>
+							)}
+							{automationStatus?.activeRun?.errorMessage && (
+								<div className={styles.automationError}>{automationStatus.activeRun.errorMessage}</div>
+							)}
+							{automationStatus?.lastRun && (
+								<div>
+									Last: {automationStatus.lastRun.state.replaceAll("_", " ")}
+									{automationStatus.lastRun.mediaId
+										? ` • ${automationStatus.lastRun.mediaId}`
+										: ""}
+									{automationStatus.lastRun.finishedAt
+										? ` • ${new Date(automationStatus.lastRun.finishedAt).toLocaleString()}`
+										: ""}
+								</div>
+							)}
+							{automationStatus?.lastRun?.errorMessage && (
+								<div className={styles.automationError}>{automationStatus.lastRun.errorMessage}</div>
+							)}
+						</div>
+
+						<div className={styles.automationActions}>
+							<button
+								className={styles.buttonSecondary}
+								type="button"
+								onClick={() => void queueAutomationAction("probe")}
+								disabled={automationBusy || Boolean(automationStatus?.activeRun)}
+							>
+								Check renderer
+							</button>
+							<button
+								className={styles.buttonExport}
+								type="button"
+								onClick={() => void saveAutomationSettings()}
+								disabled={automationBusy}
+							>
+								Save schedule
+							</button>
+							<button
+								className={styles.buttonInstagram}
+								type="button"
+								onClick={() => void queueAutomationAction("publish")}
+								disabled={
+									automationBusy ||
+									Boolean(automationStatus?.activeRun) ||
+									!automationStatus?.capability?.supported
+								}
+							>
+								Run now (real post)
+							</button>
+						</div>
+						{automationMessage && (
+							<div className={styles.automationMessage}>{automationMessage}</div>
+						)}
 					</div>
 
 					<div className={styles.buttonGroup}>

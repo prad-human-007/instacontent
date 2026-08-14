@@ -5,6 +5,12 @@ import {
 	AuthorizationError,
 	requireInstagramAdministrator,
 } from "@/lib/instagram/access";
+import { requireAutomationJob } from "@/lib/instagram/automation-access";
+import {
+	createAutomationPublicationKey,
+	updateAutomationJob,
+	type AutomationJob,
+} from "@/lib/instagram/automation-store";
 import {
 	InstagramPublishingError,
 	publishInstagramReel,
@@ -138,16 +144,30 @@ function streamResponse(events: StreamEvent[], status = 200): Response {
 }
 
 export async function POST(request: Request): Promise<Response> {
-	try {
-		await requireInstagramAdministrator(request);
-	} catch (error) {
-		if (error instanceof ServerConfigurationError) {
-			return jsonError(error.code, error.message, 503);
+	let automationJob: AutomationJob | null = null;
+	const automationRunId = request.headers.get("x-instacontent-automation-run-id");
+	if (automationRunId) {
+		try {
+			automationJob = await requireAutomationJob(request);
+			if (automationJob.kind !== "publish") throw new Error("AUTOMATION_FORBIDDEN");
+		} catch (error) {
+			if (error instanceof ServerConfigurationError) {
+				return jsonError(error.code, error.message, 503);
+			}
+			return jsonError("FORBIDDEN", "Automation is not authorized to publish.", 403);
 		}
-		if (error instanceof AuthorizationError) {
-			return jsonError(error.code, error.message, 403);
+	} else {
+		try {
+			await requireInstagramAdministrator(request);
+		} catch (error) {
+			if (error instanceof ServerConfigurationError) {
+				return jsonError(error.code, error.message, 503);
+			}
+			if (error instanceof AuthorizationError) {
+				return jsonError(error.code, error.message, 403);
+			}
+			return jsonError("FORBIDDEN", "You are not authorized to publish to Instagram.", 403);
 		}
-		return jsonError("FORBIDDEN", "You are not authorized to publish to Instagram.", 403);
 	}
 
 	const contentType = request.headers.get("content-type") ?? "";
@@ -165,7 +185,7 @@ export async function POST(request: Request): Promise<Response> {
 
 	let config;
 	try {
-		config = getInstagramRuntimeConfig();
+		config = await getInstagramRuntimeConfig({ refreshToken: Boolean(automationJob) });
 	} catch (error) {
 		if (error instanceof ServerConfigurationError) {
 			return jsonError(error.code, error.message, 503);
@@ -209,9 +229,19 @@ export async function POST(request: Request): Promise<Response> {
 		return jsonError("INVALID_EXPORT_ID", "The generated video identity is invalid.", 400);
 	}
 
-	const idempotencyDigest = await sha256Hex(
-		`instagram-reel:${config.accountId}:${exportId}`,
-	);
+	const expectedAutomationPublicationKey = automationJob
+		? await createAutomationPublicationKey(config.accountId, automationJob.localDate)
+		: null;
+	if (
+		automationJob &&
+		(!/^[a-f0-9]{64}$/.test(automationJob.publicationKey ?? "") ||
+			automationJob.publicationKey !== expectedAutomationPublicationKey)
+	) {
+		return jsonError("FORBIDDEN", "Automation publication identity is invalid.", 403);
+	}
+	const idempotencyDigest = automationJob
+		? (expectedAutomationPublicationKey as string)
+		: await sha256Hex(`instagram-reel:${config.accountId}:${exportId}`);
 	const recordKey = `internal-publication-state/${idempotencyDigest}.json`;
 	const objectKey = `temporary-instagram-media/${new Date()
 		.toISOString()
@@ -316,6 +346,27 @@ export async function POST(request: Request): Promise<Response> {
 	}
 
 	const videoUrl = makePublicUrl(config.mediaPublicBaseUrl, objectKey);
+	if (automationJob) {
+		try {
+			const publicationStartedAt = new Date().toISOString();
+			const updated = await updateAutomationJob(config.mediaBucket, automationJob.runId, {
+				publicationStartedAt,
+				state: "preparing_reel",
+			});
+			if (!updated) throw new Error("AUTOMATION_JOB_MISSING");
+		} catch {
+			record = { ...record, state: "failed", updatedAt: new Date().toISOString() };
+			await Promise.allSettled([
+				config.mediaBucket.delete(objectKey),
+				writeRecord(config.mediaBucket, recordKey, record),
+			]);
+			return jsonError(
+				"AUTOMATION_STATE_WRITE_FAILED",
+				"The automatic publication was stopped before contacting Instagram.",
+				503,
+			);
+		}
+	}
 	const { ctx } = getCloudflareContext();
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {

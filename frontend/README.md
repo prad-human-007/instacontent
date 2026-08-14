@@ -1,8 +1,9 @@
 # Instacontent
 
 Next.js application deployed to the `instacontent` Cloudflare Worker through
-OpenNext. The `/modi` tool generates an H.264/AAC MP4 in the browser and can
-publish that completed export as an Instagram Reel.
+OpenNext. The `/modi` tool generates an H.264/AAC MP4 with WebCodecs and
+Mediabunny, publishes completed exports as Instagram Reels, and can run the
+same workflow unattended through Cloudflare Browser Run and a Cron Trigger.
 
 ## Environment model
 
@@ -28,6 +29,7 @@ INSTAGRAM_ACCESS_TOKEN=<Instagram User access token>
 INSTAGRAM_ACCOUNT_ID=<Instagram-scoped professional account ID>
 INSTAGRAM_MEDIA_PUBLIC_BASE_URL=https://<public R2 custom domain>
 INSTAGRAM_GRAPH_API_VERSION=v25.0
+INSTACONTENT_PUBLIC_BASE_URL=https://<deployed-app-hostname>
 ```
 
 The Cloudflare Access values may stay empty during `npm run dev`; authorization
@@ -38,6 +40,10 @@ hostname is localhost:
 CLOUDFLARE_ACCESS_TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com
 CLOUDFLARE_ACCESS_AUD=<Access application AUD tag>
 INSTAGRAM_PUBLISH_ADMIN_EMAILS=<admin@example.com,second-admin@example.com>
+CLOUDFLARE_ACCESS_SERVICE_CLIENT_ID=<Access-service-token-client-id>
+CLOUDFLARE_ACCESS_SERVICE_CLIENT_SECRET=<Access-service-token-client-secret>
+INSTAGRAM_AUTOMATION_SIGNING_KEY=<random-32-plus-character-secret>
+INSTAGRAM_TOKEN_ENCRYPTION_KEY=<base64-encoded-32-byte-key>
 ```
 
 Never copy production secrets out of Cloudflare merely to deploy. The existing
@@ -96,7 +102,21 @@ INSTAGRAM_GRAPH_API_VERSION=v25.0
 CLOUDFLARE_ACCESS_TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com
 CLOUDFLARE_ACCESS_AUD=<Access application AUD tag>
 INSTAGRAM_PUBLISH_ADMIN_EMAILS=<comma-separated authorized emails>
+INSTACONTENT_PUBLIC_BASE_URL=https://<deployed-app-hostname>
 ```
+
+Add these as Worker secrets, never plain variables:
+
+```text
+INSTAGRAM_AUTOMATION_SIGNING_KEY
+INSTAGRAM_TOKEN_ENCRYPTION_KEY
+CLOUDFLARE_ACCESS_SERVICE_CLIENT_ID
+CLOUDFLARE_ACCESS_SERVICE_CLIENT_SECRET
+```
+
+`INSTAGRAM_TOKEN_ENCRYPTION_KEY` must decode to exactly 32 bytes. Start
+automation with a freshly issued long-lived Instagram token; the Worker
+encrypts its managed copy in R2 and attempts refresh after 30 days.
 
 `keep_vars: true` in `wrangler.jsonc` prevents dashboard-managed non-secret
 variables from being removed by a deploy.
@@ -127,6 +147,30 @@ valid and its email is in `INSTAGRAM_PUBLISH_ADMIN_EMAILS`.
 The route validates the JWT signature against Cloudflare’s rotating JWKS, plus
 issuer, audience, expiry, not-before time, and administrator email. Merely
 supplying an Access-looking header is not accepted.
+
+## Required automation setup
+
+1. In **Zero Trust → Access controls → Service credentials**, create a service
+   token dedicated to `instacontent` automation.
+2. Add a Service Auth policy to the existing Access application that allows
+   this service token to open the deployed `/modi` page and its API routes.
+3. Save the client ID and secret as the Worker secrets shown above.
+4. Set `INSTACONTENT_PUBLIC_BASE_URL` to the deployed HTTPS origin, without a
+   path, query, credentials, or fragment.
+5. Deploy the custom OpenNext Worker. `wrangler.jsonc` supplies the `BROWSER`
+   binding and a once-per-minute Cron Trigger. The trigger launches a browser
+   only when a saved local time is due or a Run now/check job is queued.
+6. Open `/modi`, select dates/audio, click **Check renderer**, and wait for
+   WebCodecs to show **Ready**.
+7. Choose time/timezone, enable automation, then click **Save schedule**.
+
+The Cloudflare account must have Browser Rendering enabled and enough browser
+session, Worker CPU, and Cron capacity for the generated Reel duration.
+
+The automated browser receives a per-run HMAC signature only on same-origin
+requests. Access service credentials and the signature are not sent to other
+origins. R2 daily locks prevent Cron retries and Run now from publishing twice
+on the same local date.
 
 ## Publishing safety
 
@@ -163,7 +207,9 @@ npm run build
 npm run deploy
 ```
 
-No automated command makes a real Instagram post. The Post action is manual.
+`npm run deploy` installs the Cron Trigger but does not publish immediately.
+The first automatic post happens at the saved schedule or after confirming
+**Run now (real post)** on `/modi`.
 
 ## First manual Reel test
 
@@ -174,7 +220,7 @@ No automated command makes a real Instagram post. The Post action is manual.
    `instagram_business_content_publish`.
 3. For local testing, fill `.env.development.local`, authenticate Wrangler, and
    run `npm run dev`.
-4. Open `/modi`, select dates/audio, then click **Export MP4**.
+4. Open `/modi`, select dates/audio, then click **Generate Video**.
 5. Wait for **Video ready**. Review the downloaded MP4 before continuing.
 6. Review or edit the generated caption.
 7. Click **Post to Instagram** once. Leave the page open through Uploading,

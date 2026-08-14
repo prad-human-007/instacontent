@@ -9,7 +9,7 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "instacontent",
-	"main": ".open-next/worker.js",
+	"main": "custom-worker.ts",
 	"compatibility_date": "2026-07-23",
 	"compatibility_flags": [
 		"nodejs_compat",
@@ -26,6 +26,12 @@
 		// Enable image optimization
 		// see https://opennext.js.org/cloudflare/howtos/image
 		"binding": "IMAGES"
+	},
+	"browser": {
+		"binding": "BROWSER"
+	},
+	"triggers": {
+		"crons": ["* * * * *"]
 	},
 	"services": [
 		{
